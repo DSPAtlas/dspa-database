@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS lip_experiments (
     strain VARCHAR(255),
     instrument VARCHAR(255),
     number_of_lip_files INT,
+    numer_of_tr_files INT,
     experiment VARCHAR(255),
     approach VARCHAR(255),
     reference_for_protocol VARCHAR(255),
@@ -23,7 +24,9 @@ CREATE TABLE IF NOT EXISTS lip_experiments (
     fasta INT,
     data_re_analysis_settings VARCHAR(255),
     path_to_raw_files VARCHAR(255),
+    digestion_protocol VARCHAR(255),
     e_s_ratio VARCHAR(255),
+    pk_digestion_time VARCHAR(255),
     protease VARCHAR(255),
     author VARCHAR(255)
 );
