@@ -3,7 +3,6 @@ CREATE TABLE IF NOT EXISTS organism (
     organism_name VARCHAR(255)
 );
 
--- DROP TABLE IF EXISTS organism_proteome;
 CREATE TABLE IF NOT EXISTS organism_proteome (
     proteome_id VARCHAR(20) PRIMARY KEY,
     taxonomy_id INT,
@@ -21,10 +20,10 @@ CREATE TABLE IF NOT EXISTS organism_proteome_entries (
     PRIMARY KEY (proteome_id, seq_id)
 );
 
--- Insert data into the 'organism' table
 INSERT INTO organism (taxonomy_id, organism_name) VALUES
     (9606, 'Homo sapiens'),
     (10090, 'Mus musculus'),
-    (559292, 'Saccharomyces cerevisiae'),
-    (562, 'Escherichia coli');
+    (559292, 'Saccharomyces cerevisiae S288C'),
+    (83333, 'Escherichia coli K12');
+
 

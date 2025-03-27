@@ -15,7 +15,7 @@ db_connection = mysql.connector.connect(
     host="localhost",
     user="root",
     #password=mysql_password,
-    database="dspadb",
+    database="dynaprotdb",
 )
 cursor = db_connection.cursor()
 
