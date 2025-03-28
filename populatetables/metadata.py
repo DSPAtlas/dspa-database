@@ -4,11 +4,16 @@ import mysql.connector
 import math
 import yaml
 
-# Create a MySQL connection
+# -------------------------------------------------------------------------------------
+# Upload Experiment and comparisons
+# Differential Abundance
+# GO Term
+# -------------------------------------------------------------------------------------
+
 db_connection = mysql.connector.connect(
     host="localhost",
     user="root",
-    database="dynaprotdb",
+    database="dynaprotdbv2",
 )
 cursor = db_connection.cursor()
 
@@ -26,7 +31,7 @@ def generate_next_id(table, column, prefix):
         num = 1
     return f"{prefix}{num:06d}"
 
-base_directory = "data/"
+base_directory = "data/experiments"
 
 for folder in os.listdir(base_directory):
     folder_path = os.path.join(base_directory, folder)
@@ -90,11 +95,9 @@ for folder in os.listdir(base_directory):
         comparison_names = params_data.get("comparison", [])
 
         for i, comp_id in enumerate(dpx_comparisons):
-            comparison_name = comparison_names[i] if i < len(comparison_names) else None
-            if not comparison_name:
-                continue
+            comparison_name = comparison_names[i]
 
-            dpx_comp_id = generate_next_id("dynaprot_experiment_comparison", "dpx_comparison", "DPX")
+            dpx_comp_id = dpx_id + "-" +comp_id
             sql = """
             INSERT INTO dynaprot_experiment_comparison (
                 dpx_comparison, taxonomy_id, treatment, dose, dynaprot_experiment
@@ -112,10 +115,11 @@ for folder in os.listdir(base_directory):
             for file_name in os.listdir(folder_path):
                 file_path = os.path.join(folder_path, file_name)
 
-                if file_name == f"differential_abundance_{comparison_name}.csv":
-                    df = pd.read_csv(file_path).where(pd.notnull(pd.read_csv(file_path)), None)
-                    df = df.rename(columns={'start': 'pos_start', 'end': 'pos_end', "pep_stripped_sequence": "pep_grouping_key"})
-                    columns = ['pg_protein_accessions', 'pep_grouping_key', 'pos_start', 'pos_end', 'diff', 'adj_pval']
+                if file_name == f"differential_abundance_{comp_id}_{comparison_name}.csv":
+                    df = pd.read_csv(file_path, delimiter="\t")
+                    df = df.where(pd.notnull(df), None)
+                    df = df.rename(columns={'start': 'pos_start', 'end': 'pos_end'})
+                    columns = ['pg_protein_accessions', 'eg_modified_peptide', 'pos_start', 'pos_end', 'diff', 'adj_pval']
                     df = df[columns]
                     for _, row in df.iterrows():
                         sql = """
@@ -127,7 +131,7 @@ for folder in os.listdir(base_directory):
                         values = (
                             dpx_comp_id,
                             replace_missing(row.get('pg_protein_accessions')),
-                            replace_missing(row.get('pep_grouping_key')),
+                            replace_missing(row.get('eg_modified_peptide')),
                             replace_missing(row.get('pos_start')),
                             replace_missing(row.get('pos_end')),
                             replace_missing(row.get('diff')),
@@ -135,8 +139,9 @@ for folder in os.listdir(base_directory):
                         )
                         cursor.execute(sql, values)
 
-                elif file_name == f"go_term_{comparison_name}.csv":
-                    df = pd.read_csv(file_path).where(pd.notnull(pd.read_csv(file_path)), None)
+                if file_name == f"go_term_{comp_id}_{comparison_name}.csv":
+                    df = pd.read_csv(file_path, delimiter="\t")
+                    df = df.where(pd.notnull(df), None)
                     columns = ['term', 'go_id', 'pval', 'adj_pval',
                                'n_detected_proteins', 'n_detected_proteins_in_process',
                                'n_significant_proteins', 'n_significant_proteins_in_process',

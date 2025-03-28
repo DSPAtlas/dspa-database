@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS dynaprot_experiment (
     approach VARCHAR(255),
     reference_for_protocol VARCHAR(255),
     data_analysis VARCHAR(255),
-    publication VARCHAR(255),
+    publication TEXT,
     doi VARCHAR(255),
     search_settings VARCHAR(255),
     fasta VARCHAR(255),
@@ -29,17 +29,19 @@ CREATE TABLE IF NOT EXISTS dynaprot_experiment (
     protease VARCHAR(255),
     author VARCHAR(255),
     input_file VARCHAR(255),
-    qc_pdf_file LONGBLOB,
+    qc_pdf_file LONGBLOB
 );
 
+ALTER TABLE dynaprot_experiment 
+MODIFY publication LONGTEXT;
 
 CREATE TABLE IF NOT EXISTS dynaprot_experiment_comparison (
     dpx_comparison VARCHAR(11) PRIMARY KEY,
-    submission_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     taxonomy_id INT,
     treatment VARCHAR(255),
     dose VARCHAR(255),
-    FOREIGN KEY (dynaprot_experiment) REFERENCES dynaprot_experiment(dynaprot_experiment),
+    dynaprot_experiment VARCHAR(11),
+    FOREIGN KEY (dynaprot_experiment) REFERENCES dynaprot_experiment(dynaprot_experiment)
 );
 
 CREATE TABLE IF NOT EXISTS differential_abundance (
@@ -56,12 +58,13 @@ CREATE TABLE IF NOT EXISTS differential_abundance (
     PRIMARY KEY (differential_abundance_id)
 );
 
+
+
 CREATE TABLE IF NOT EXISTS protein_scores (
     protein_score_id INT AUTO_INCREMENT PRIMARY KEY,
     pg_protein_accessions VARCHAR(255),
     protein_description TEXT,
     cumulativeScore FLOAT,
     dpx_comparison VARCHAR(11),
-    FOREIGN KEY (pg_protein_accessions) REFERENCES differential_abundance(pg_protein_accessions),
-    FOREIGN KEY (dpx_comparison) REFERENCES dynaprot_experiment_comparison(dpx_comparison),
+    FOREIGN KEY (dpx_comparison) REFERENCES dynaprot_experiment_comparison(dpx_comparison)
 );

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS organism_proteome_entries (
 INSERT INTO organism (taxonomy_id, organism_name) VALUES
     (9606, 'Homo sapiens'),
     (10090, 'Mus musculus'),
-    (559292, 'Saccharomyces cerevisiae S288C'),
-    (83333, 'Escherichia coli K12');
+    (559292, 'Saccharomyces cerevisiae'),
+    (83333, 'Escherichia coli');
 
 

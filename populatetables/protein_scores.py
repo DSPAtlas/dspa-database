@@ -6,7 +6,7 @@ def insert_protein_scores(connection, scores, experiment_id):
     """Insert calculated protein scores into the database."""
     cursor = connection.cursor()
     query = """
-    INSERT INTO protein_scores (pg_protein_accessions, protein_description, cumulativeScore, lipexperiment_id)
+    INSERT INTO protein_scores (pg_protein_accessions, protein_description, cumulativeScore, dpx_comparison)
     VALUES (%s, %s, %s, %s)
     """
     values = []
@@ -43,7 +43,7 @@ def connect_to_database(host, database, user):
 def fetch_lip_experiments(connection):
     """Fetch all lip experiments from the database."""
     cursor = connection.cursor(dictionary=True)
-    query = "SELECT * FROM lip_experiments"
+    query = "SELECT * FROM dynaprot_experiment_comparison"
     cursor.execute(query)
     experiments = cursor.fetchall()
     cursor.close()
@@ -62,7 +62,7 @@ def fetch_differential_abundance_data(connection, lipexperiment_id):
     FROM
         differential_abundance
     WHERE
-        lipexperiment_id = %s
+        dpx_comparison = %s
     """
     cursor.execute(query, (lipexperiment_id,))
     results = cursor.fetchall()
@@ -101,7 +101,7 @@ def process_experiment_data(data):
 def main():
     # Database credentials
     host = 'localhost'
-    database = 'dynaprotdb'
+    database = 'dynaprotdbv2'
     user = 'root'
    # password = 'your_password'
     
@@ -113,11 +113,11 @@ def main():
         
         # Process each experiment
         for experiment in experiments:
-            print(f"Processing experiment {experiment['lipexperiment_id']}")
-            data = fetch_differential_abundance_data(connection, experiment['lipexperiment_id'])
+            print(f"Processing experiment {experiment['dpx_comparison']}")
+            data = fetch_differential_abundance_data(connection, experiment['dpx_comparison'])
             scores = process_experiment_data(data)
-            print(f"Scores for {experiment['lipexperiment_id']}: {scores}")
-            insert_protein_scores(connection, scores, experiment['lipexperiment_id'])
+            print(f"Scores for {experiment['dpx_comparison']}: {scores}")
+            insert_protein_scores(connection, scores, experiment['dpx_comparison'])
 
         # Close the database connection
         connection.close()
