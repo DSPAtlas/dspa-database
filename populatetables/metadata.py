@@ -53,7 +53,7 @@ for folder in os.listdir(base_directory):
 
         sql = """
         INSERT INTO dynaprot_experiment (
-            dynaprot_experiment, perturbation, `condition`, treatment, taxonomy_id, strain,
+            dynaprot_experiment, perturbation, `condition`, taxonomy_id, strain,
             instrument, number_of_lip_files, number_of_tr_files, experiment,
             approach, reference_for_protocol, data_analysis, publication, doi,
             search_settings, fasta, data_re_analysis_settings, path_to_raw_files,
@@ -65,7 +65,6 @@ for folder in os.listdir(base_directory):
             dpx_id,
             replace_missing(params_data.get("perturbation")),
             replace_missing(params_data.get("condition")),
-            replace_missing(params_data.get("treatment")),
             int(params_data.get("taxonomy_id", 0)),
             replace_missing(params_data.get("strain")),
             replace_missing(params_data.get("instrument")),
@@ -100,13 +99,13 @@ for folder in os.listdir(base_directory):
             dpx_comp_id = dpx_id + "-" +comp_id
             sql = """
             INSERT INTO dynaprot_experiment_comparison (
-                dpx_comparison, taxonomy_id, treatment, dose, dynaprot_experiment
+                dpx_comparison, taxonomy_id, `condition`, dose, dynaprot_experiment
             ) VALUES (%s, %s, %s, %s, %s)
             """
             values = (
                 dpx_comp_id,
                 int(params_data.get("taxonomy_id", 0)),
-                replace_missing(params_data.get("treatment")),
+                replace_missing(params_data.get("condition")),
                 comparison_name,
                 dpx_id
             )

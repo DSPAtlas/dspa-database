@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS dynaprot_experiment (
     submission_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     perturbation VARCHAR(255),
     `condition`  VARCHAR(225),
-    treatment  VARCHAR(225),
     taxonomy_id INT,
     strain VARCHAR(255),
     instrument VARCHAR(255),
@@ -38,7 +37,7 @@ MODIFY publication LONGTEXT;
 CREATE TABLE IF NOT EXISTS dynaprot_experiment_comparison (
     dpx_comparison VARCHAR(11) PRIMARY KEY,
     taxonomy_id INT,
-    treatment VARCHAR(255),
+     `condition`  VARCHAR(225),
     dose VARCHAR(255),
     dynaprot_experiment VARCHAR(11),
     FOREIGN KEY (dynaprot_experiment) REFERENCES dynaprot_experiment(dynaprot_experiment)
