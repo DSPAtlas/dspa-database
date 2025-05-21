@@ -1,8 +1,10 @@
-
+#!/bin/bash
 # Replace with your MySQL connection details
 export MYSQL_USER='host' 
 export MYSQL_HOST='localhost'
 export MYSQL_DATABASE='dynaprotdbv2'
+export MYSQL_PASSWORD=''
+
 
 python3 populatetables/organism.py
 

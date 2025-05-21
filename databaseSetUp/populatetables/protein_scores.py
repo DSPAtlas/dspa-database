@@ -41,13 +41,19 @@ def connect_to_database(host, database, user):
         return None
 
 def fetch_lip_experiments(connection):
-    """Fetch all lip experiments from the database."""
+    """Fetch experiments that don't have protein scores inserted yet."""
     cursor = connection.cursor(dictionary=True)
-    query = "SELECT * FROM dynaprot_experiment_comparison"
+    query = """
+    SELECT c.dpx_comparison
+    FROM dynaprot_experiment_comparison c
+    LEFT JOIN protein_scores p ON c.dpx_comparison = p.dpx_comparison
+    WHERE p.dpx_comparison IS NULL
+    """
     cursor.execute(query)
     experiments = cursor.fetchall()
     cursor.close()
     return experiments
+
 
 def fetch_differential_abundance_data(connection, lipexperiment_id):
     """Fetch differential abundance data for a given experiment."""

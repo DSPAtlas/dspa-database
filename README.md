@@ -22,7 +22,8 @@ mysql> SHOW TABLES;
 
 ## 🚀 Uploading a New Experiment
 
-Use the uploadLipExperiment.sh script to upload an experiment folder to the remote VM, run the upload scripts, and clean up afterward.
+
+Use the `uploadNewExpweriment/uploadLipExperiment.sh` script to upload an experiment folder to the remote VM, run the upload scripts, and clean up afterward.
 
 This script:
 

@@ -5,18 +5,15 @@ import re
 
 # Database configuration
 db_config = {
-    'host': 'localhost',
-    'user': 'root',
-    'database': 'dynaprotdbv2'
+    'host': os.environ.get('MYSQL_HOST'),
+    'user': os.environ.get('MYSQL_USER'),
+    'database': os.environ.get('MYSQL_DATABASE'),
+    'password': os.environ.get('MYSQL_PASSWORD')
 }
 
 # Establish a database connection
 try:
-    db_connection = mysql.connector.connect(
-    host="localhost",
-    user="root",
-    database="dynaprotdbv2",
-    )
+    db_connection = mysql.connector.connect(**db_config)
     cursor = db_connection.cursor()
     print("Database connection established.")
 except mysql.connector.Error as err:
