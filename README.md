@@ -4,10 +4,12 @@ Code for database upload and database layout.
 
 ## 📦 Current Tables in dynaprotdbv2
 
+![Screenshot 2025-05-22 at 13 37 18](https://github.com/user-attachments/assets/4adabd87-b4fb-4baa-a8d0-984d501bd084)
+
+
 mysql> SHOW TABLES;
-+--------------------------------+
-| Tables_in_dynaprotdbv2         |
-+--------------------------------+
+| Table Name                     |
+|--------------------------------|
 | differential_abundance         |
 | dynaprot_experiment            |
 | dynaprot_experiment_comparison |
@@ -17,8 +19,8 @@ mysql> SHOW TABLES;
 | organism_proteome              |
 | organism_proteome_entries      |
 | protein_scores                 |
-+--------------------------------+
-9 rows in set (0.00 sec)
+
+
 
 ## 🚀 Uploading a New Experiment
 
