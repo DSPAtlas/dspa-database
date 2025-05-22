@@ -45,6 +45,8 @@ def replace_missing(data, default=None):
         return default
     return data
 
+def get_diff_value(row):
+    return row.get('diff') if 'diff' in row else row.get('adj_diff')
 
 def generate_next_id(table, column, prefix):
     cursor.execute(f"SELECT MAX({column}) FROM {table}")
@@ -138,8 +140,8 @@ if os.path.exists(params_file):
                 df = pd.read_csv(file_path, delimiter="\t")
                 df = df.where(pd.notnull(df), None)
                 df = df.rename(columns={'start': 'pos_start', 'end': 'pos_end'})
-                columns = ['pg_protein_accessions', 'eg_modified_peptide',  'adj_diff', 'adj_pval']
-                df = df[columns]
+                #columns = ['pg_protein_accessions', 'eg_modified_peptide', 'diff', 'adj_diff', 'adj_pval', 'pos_start', 'pos_end']
+               # df = df[columns]
                 for _, row in df.iterrows():
                     sql = """
                         INSERT INTO differential_abundance (
@@ -153,7 +155,7 @@ if os.path.exists(params_file):
                             replace_missing(row.get('eg_modified_peptide')),
                             replace_missing(row.get('pos_start')),
                             replace_missing(row.get('pos_end')),
-                            replace_missing(row.get('adj_diff')),
+                           replace_missing(get_diff_value(row)),
                             replace_missing(row.get('adj_pval')),
                         )
                     cursor.execute(sql, values)

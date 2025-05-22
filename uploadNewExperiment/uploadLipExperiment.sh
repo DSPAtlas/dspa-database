@@ -18,7 +18,7 @@ scp -r ./src "$VM_USER@$VM_HOST:/tmp/src"
 # Run scripts on VM in the virtual environment
 ssh "$VM_USER@$VM_HOST" bash -c "'
   export MYSQL_USER=root
-  export MYSQL_PASSWORD=
+  export MYSQL_PASSWORD=dspa
   export MYSQL_HOST=127.0.0.1
   export MYSQL_PORT=3307
   export MYSQL_DATABASE=dynaprotdbv2
@@ -31,22 +31,29 @@ ssh "$VM_USER@$VM_HOST" bash -c "'
   python /tmp/src/metadata.py /tmp/upload/$(basename "$FOLDER_TO_UPLOAD")
   python /tmp/src/proteinScores.py
   
-  # Run index updates
+  # Run index updates (safe on all MySQL versions)
   mysql -h \$MYSQL_HOST -P \$MYSQL_PORT -u \$MYSQL_USER -p\$MYSQL_PASSWORD \$MYSQL_DATABASE <<EOF
-ALTER TABLE differential_abundance 
-  ADD INDEX IF NOT EXISTS idx_dpx_comparison (dpx_comparison),
-  ADD INDEX IF NOT EXISTS idx_pg_protein (pg_protein_accessions);
+DROP INDEX IF EXISTS idx_dpx_comparison ON differential_abundance;
+CREATE INDEX idx_dpx_comparison ON differential_abundance (dpx_comparison);
 
-ALTER TABLE protein_scores 
-  ADD INDEX IF NOT EXISTS idx_protein_score_exp (dpx_comparison);
+DROP INDEX IF EXISTS idx_pg_protein ON differential_abundance;
+CREATE INDEX idx_pg_protein ON differential_abundance (pg_protein_accessions);
 
-ALTER TABLE dynaprot_experiment_comparison 
-  ADD INDEX IF NOT EXISTS idx_exp_comp (dpx_comparison),
-  ADD INDEX IF NOT EXISTS idx_dynaprot_exp (dynaprot_experiment);
+DROP INDEX IF EXISTS idx_protein_score_exp ON protein_scores;
+CREATE INDEX idx_protein_score_exp ON protein_scores (dpx_comparison);
+
+DROP INDEX IF EXISTS idx_exp_comp ON dynaprot_experiment_comparison;
+CREATE INDEX idx_exp_comp ON dynaprot_experiment_comparison (dpx_comparison);
+
+DROP INDEX IF EXISTS idx_dynaprot_exp ON dynaprot_experiment_comparison;
+CREATE INDEX idx_dynaprot_exp ON dynaprot_experiment_comparison (dynaprot_experiment);
 EOF
-echo "✅ MySQL indexes have been updated successfully."
-# Clean up uploaded data folder
+
+  echo \"✅ MySQL indexes have been updated successfully.\"
+
+  # Clean up uploaded data folder
   rm -rf /tmp/upload/$(basename "$FOLDER_TO_UPLOAD")
   echo \"🧹 Upload folder cleaned up from VM.\"
 '"
+
 
