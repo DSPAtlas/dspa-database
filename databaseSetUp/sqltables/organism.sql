@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS organism_proteome_entries (
     seq TEXT,
     protein_name VARCHAR(255),
     protein_description VARCHAR(255),
+    gene_name VARCHAR(255),
     FOREIGN KEY (taxonomy_id) REFERENCES organism(taxonomy_id),
     PRIMARY KEY (proteome_id, seq_id)
 );
