@@ -68,3 +68,12 @@ echo "Usage: ./uploadLipExperiment.sh /path/to/folder vm_username"
 
 - Instead, export credentials in your shell or use environment files or secrets management tools for production.
 
+The following two indices are important:
+
+```sql
+ALTER TABLE organism_proteome_entries
+  ADD INDEX idx_ope_taxonomy_protein (taxonomy_id, protein_name);
+
+ALTER TABLE protein_scores
+  ADD INDEX idx_ps_dpx_protein_score (dpx_comparison, pg_protein_accessions, cumulativeScore);
+```
