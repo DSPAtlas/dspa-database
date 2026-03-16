@@ -76,4 +76,6 @@ ALTER TABLE organism_proteome_entries
 
 ALTER TABLE protein_scores
   ADD INDEX idx_ps_dpx_protein_score (dpx_comparison, pg_protein_accessions, cumulativeScore);
+
+CREATE INDEX idx_go_id ON go_term(go_id);
 ```
