@@ -26,5 +26,6 @@ INSERT INTO organism (taxonomy_id, organism_name) VALUES
     (10090, 'Mus musculus'),
     (559292, 'Saccharomyces cerevisiae'),
     (83333, 'Escherichia coli');
+    (562, 'Escherichia coli');
 
 
