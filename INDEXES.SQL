@@ -34,12 +34,3 @@ CREATE INDEX idx_ps_dpx_protein_score ON protein_scores (dpx_comparison, pg_prot
 -- Supports comparison-plus-protein score joins without depending on the wider covering index.
 CREATE INDEX idx_ps_comparison_accession ON protein_scores (dpx_comparison, pg_protein_accessions);
 
--- Speeds dose-response lookups by experiment and protein, then narrows to peptide grouping keys.
-CREATE INDEX idx_drf_experiment_accession_pep ON dose_response_fit (dynaprot_experiment, pg_protein_accessions, pep_grouping_key);
-
--- Speeds retrieval of fitted dose-response curves for the peptide keys of one experiment.
-CREATE INDEX idx_drpc_experiment_pep ON dose_response_plot_curve (dynaprot_experiment, pep_grouping_key);
-
--- Speeds retrieval of dose-response plot points for the peptide keys of one experiment.
-CREATE INDEX idx_drpp_experiment_pep ON dose_response_plot_points (dynaprot_experiment, pep_grouping_key);
-
