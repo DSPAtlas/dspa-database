@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS dynaprot_experiment (
     protease VARCHAR(255),
     author VARCHAR(255),
     input_file VARCHAR(255),
-    qc_pdf_file LONGBLOB
+    qc_pdf_file LONGBLOB,
+    is_hidden TINYINT(1) NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS dynaprot_experiment_comparison (
@@ -59,6 +60,7 @@ CREATE TABLE IF NOT EXISTS dynaprot_experiment_comparison (
     `condition` VARCHAR(225),
     dose VARCHAR(255),
     dynaprot_experiment VARCHAR(11),
+    is_hidden TINYINT(1) NOT NULL DEFAULT 0,
     FOREIGN KEY (dynaprot_experiment) REFERENCES dynaprot_experiment(dynaprot_experiment)
 );
 
@@ -71,6 +73,7 @@ CREATE TABLE IF NOT EXISTS differential_abundance (
     pos_end INT,
     diff FLOAT,
     adj_pval FLOAT,
+    pval FLOAT,
     submission_timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (dpx_comparison) REFERENCES dynaprot_experiment_comparison(dpx_comparison)
 );

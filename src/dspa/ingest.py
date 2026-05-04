@@ -179,6 +179,7 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
                         "pos_end": _replace_missing(row.get("pos_end")),
                         "diff": _replace_missing(_get_diff_value(row)),
                         "adj_pval": _replace_missing(row.get("adj_pval")),
+                        "pval": _replace_missing(row.get("pval")),
                     }
                 )
             if not dry_run:
@@ -186,9 +187,9 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
                     """
                     INSERT INTO differential_abundance
                         (dpx_comparison, pg_protein_accessions, pep_grouping_key,
-                         pos_start, pos_end, diff, adj_pval)
+                         pos_start, pos_end, diff, adj_pval, pval)
                     VALUES (%(dpx_comparison)s, %(pg_protein_accessions)s, %(pep_grouping_key)s,
-                            %(pos_start)s, %(pos_end)s, %(diff)s, %(adj_pval)s)
+                            %(pos_start)s, %(pos_end)s, %(diff)s, %(adj_pval)s, %(pval)s)
                     """,
                     da_rows,
                 )
