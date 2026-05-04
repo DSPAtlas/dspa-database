@@ -1,9 +1,7 @@
-"""CLI entry point for dspa-ingest.
+"""CLI entry points for dspa tooling.
 
-Usage:
-  dspa-ingest /path/to/data/root          # walk tree, ingest all experiment folders
-  dspa-ingest /path/to/single/experiment  # ingest a single folder
-  dspa-ingest /path/to/data/root --dry-run
+dspa-ingest   ROOT [--dry-run] [--env-file]
+dspa-import-dump  DUMP [--truncate] [--env-file]
 """
 from __future__ import annotations
 
@@ -13,10 +11,10 @@ import click
 
 from dspa.db import get_connection
 from dspa.ingest import ingest_experiment
+from dspa.dump import import_reference_tables, REFERENCE_TABLES
 
 
 def _find_experiment_folders(root: Path) -> list[Path]:
-    """Return all directories under root that contain a params.yaml."""
     if (root / "params.yaml").exists():
         return [root]
     return sorted(p.parent for p in root.rglob("params.yaml"))
@@ -52,3 +50,23 @@ def main(root: Path, dry_run: bool, env_file: Path | None) -> None:
         connection.close()
 
     click.echo("\nDone.")
+
+
+@click.command("import-dump")
+@click.argument("dump", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+@click.option("--truncate", is_flag=True,
+              help=f"Truncate {', '.join(REFERENCE_TABLES)} before importing.")
+@click.option("--env-file", type=click.Path(exists=True, path_type=Path), default=None,
+              help="Path to .env file (default: .env in repo root).")
+def import_dump(dump: Path, truncate: bool, env_file: Path | None) -> None:
+    """Import go_term, organism_proteome, and organism_proteome_entries from a mysqldump file."""
+    click.echo(f"Reading {dump} …")
+    connection = get_connection(env_file)
+    try:
+        counts = import_reference_tables(dump, connection, truncate=truncate)
+    finally:
+        connection.close()
+
+    for table, n in counts.items():
+        click.echo(f"  {table}: {n} rows inserted")
+    click.echo("Done.")

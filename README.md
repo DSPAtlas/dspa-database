@@ -69,6 +69,20 @@ uv run dspa-ingest /path/to/data/root --env-file /path/to/.env.production
 
 Each folder is ingested in a single transaction: experiment metadata, comparisons, differential abundance, GO analysis, and protein scores are all committed together or not at all.
 
+## Importing Reference Tables from a Dump
+
+`go_term`, `organism_proteome`, and `organism_proteome_entries` are populated from a mysqldump of the production database rather than through the experiment ingestion pipeline.
+
+```bash
+# Append rows from the dump
+uv run dspa-import-dump /path/to/dump.sql
+
+# Wipe both tables first, then import (full refresh)
+uv run dspa-import-dump /path/to/dump.sql --truncate
+```
+
+Only `INSERT` statements for those two tables are read from the dump — everything else is ignored. The file is streamed line by line so large dumps are handled without loading them into memory.
+
 ## Database Indexes
 
 After a large bulk import, apply the performance indexes:
