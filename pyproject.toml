@@ -1,0 +1,26 @@
+[project]
+name = "dspa"
+version = "0.1.0"
+description = "Database ingestion tooling for the DSPAtlas/DynaProt platform"
+requires-python = ">=3.11"
+dependencies = [
+    "mysql-connector-python>=9.0",
+    "pandas>=2.0",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "click>=8.1",
+    "biopython>=1.84",
+]
+
+[project.scripts]
+dspa-ingest = "dspa.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dspa"]
+
+[dependency-groups]
+dev = []
