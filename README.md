@@ -69,19 +69,37 @@ uv run dspa-ingest /path/to/data/root --env-file /path/to/.env.production
 
 Each folder is ingested in a single transaction: experiment metadata, comparisons, differential abundance, GO analysis, and protein scores are all committed together or not at all.
 
-## Importing Reference Tables from a Dump
+## Populating Reference Tables
 
-`go_term`, `organism_proteome`, and `organism_proteome_entries` are populated from a mysqldump of the production database rather than through the experiment ingestion pipeline.
+`go_term`, `organism_proteome`, and `organism_proteome_entries` are reference data that can be populated in two ways:
+
+### Option A — from a mysqldump
 
 ```bash
-# Append rows from the dump
+# Append rows from a production dump
 uv run dspa-import-dump /path/to/dump.sql
 
-# Wipe both tables first, then import (full refresh)
+# Wipe and replace (full refresh)
 uv run dspa-import-dump /path/to/dump.sql --truncate
 ```
 
-Only `INSERT` statements for those two tables are read from the dump — everything else is ignored. The file is streamed line by line so large dumps are handled without loading them into memory.
+Only `INSERT` statements for the three reference tables are read from the dump — everything else is ignored. The file is streamed line by line so large dumps are handled without loading them into memory.
+
+### Option B — directly from UniProt
+
+Downloads reviewed (Swiss-Prot) proteins and GO annotations for the given NCBI taxonomy IDs via the UniProt REST API.
+
+```bash
+# One or more taxonomy IDs
+uv run dspa-build-reference 9606 10090 559292 83333
+
+# Wipe reference tables first, then rebuild
+uv run dspa-build-reference 9606 10090 --truncate
+```
+
+Common taxonomy IDs: `9606` (human), `10090` (mouse), `559292` (yeast), `83333` (E. coli K-12).
+
+`organism` rows are created or updated automatically. For each taxonomy, the reference proteome is resolved from UniProt, then all reviewed entries are downloaded with their sequences and GO term associations (molecular function, biological process, cellular component).
 
 ## Database Indexes
 

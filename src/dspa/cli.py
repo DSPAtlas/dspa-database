@@ -12,6 +12,7 @@ import click
 from dspa.db import get_connection
 from dspa.ingest import ingest_experiment
 from dspa.dump import import_reference_tables, REFERENCE_TABLES
+from dspa.uniprot import populate_reference_tables
 
 
 def _find_experiment_folders(root: Path) -> list[Path]:
@@ -64,6 +65,29 @@ def import_dump(dump: Path, truncate: bool, env_file: Path | None) -> None:
     connection = get_connection(env_file)
     try:
         counts = import_reference_tables(dump, connection, truncate=truncate)
+    finally:
+        connection.close()
+
+    for table, n in counts.items():
+        click.echo(f"  {table}: {n} rows inserted")
+    click.echo("Done.")
+
+
+@click.command("build-reference")
+@click.argument("taxonomy_ids", nargs=-1, type=int, required=True)
+@click.option("--truncate", is_flag=True,
+              help="Truncate go_term, organism_proteome, and organism_proteome_entries before importing.")
+@click.option("--env-file", type=click.Path(exists=True, path_type=Path), default=None,
+              help="Path to .env file (default: .env in repo root).")
+def build_reference(taxonomy_ids: tuple[int, ...], truncate: bool, env_file: Path | None) -> None:
+    """Download reviewed proteins and GO terms from UniProt for given taxonomy IDs.
+
+    Example: dspa-build-reference 9606 10090 559292
+    """
+    click.echo(f"Building reference tables for taxonomy IDs: {', '.join(str(t) for t in taxonomy_ids)}")
+    connection = get_connection(env_file)
+    try:
+        counts = populate_reference_tables(list(taxonomy_ids), connection, truncate=truncate)
     finally:
         connection.close()
 

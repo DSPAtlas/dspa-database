@@ -10,11 +10,13 @@ dependencies = [
     "python-dotenv>=1.0",
     "click>=8.1",
     "biopython>=1.84",
+    "requests>=2.32",
 ]
 
 [project.scripts]
 dspa-ingest = "dspa.cli:main"
 dspa-import-dump = "dspa.cli:import_dump"
+dspa-build-reference = "dspa.cli:build_reference"
 
 [build-system]
 requires = ["hatchling"]
