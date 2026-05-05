@@ -19,7 +19,7 @@ Database schema and ingestion tooling for the [DynaProt/DSPAtlas](https://www.dy
 **Prerequisites:** [uv](https://docs.astral.sh/uv/), Docker
 
 ```bash
-git clone <repo>
+git clone https://github.com/DSPAtlas/dspa-database
 cd dspa-database
 uv sync
 cp .env.example .env
