@@ -27,6 +27,18 @@ def _replace_missing(value, default=None):
     return value
 
 
+def _has_no_publication(publication, doi) -> bool:
+    """True if neither a publication nor a DOI is associated with the data.
+
+    `publication` is treated as absent if missing or the literal "unpublished";
+    `doi` is treated as absent if missing (blank strings are already normalised
+    to None by `_replace_missing`).
+    """
+    pub_missing = publication is None or str(publication).strip().lower() == "unpublished"
+    doi_missing = doi is None
+    return pub_missing and doi_missing
+
+
 def _generate_next_id(cursor, table: str, column: str, prefix: str) -> str:
     cursor.execute(f"SELECT MAX({column}) FROM {table}")
     result = cursor.fetchone()[0]
@@ -93,6 +105,10 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
 
     dpx_id = _generate_next_id(cursor, "dynaprot_experiment", "dynaprot_experiment", "DPX")
 
+    publication = _replace_missing(params.get("publication"))
+    doi = _replace_missing(params.get("doi"))
+    is_hidden = _has_no_publication(publication, doi)
+
     if not dry_run:
         cursor.execute(
             """
@@ -102,8 +118,8 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
                 approach, reference_for_protocol, data_analysis, publication, doi,
                 search_settings, fasta, data_re_analysis_settings, path_to_raw_files,
                 digestion_protocol, e_s_ratio, pk_digestion_time_in_sec, protease,
-                author, input_file, qc_pdf_file
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                author, input_file, qc_pdf_file, is_hidden
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             (
                 dpx_id,
@@ -118,8 +134,8 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
                 _replace_missing(params.get("approach")),
                 _replace_missing(params.get("reference_to_protocol")),
                 _replace_missing(params.get("data_analysis")),
-                _replace_missing(params.get("publication")),
-                _replace_missing(params.get("doi")),
+                publication,
+                doi,
                 _replace_missing(params.get("search_settings")),
                 _replace_missing(params.get("fasta")),
                 _replace_missing(params.get("data_reanalysis_settings")),
@@ -131,6 +147,7 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
                 _replace_missing(params.get("author")),
                 _replace_missing(params.get("input_file")),
                 pdf_data,
+                is_hidden,
             ),
         )
 
@@ -150,8 +167,8 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
             cursor.execute(
                 """
                 INSERT INTO dynaprot_experiment_comparison
-                    (dpx_comparison, taxonomy_id, `condition`, dose, dynaprot_experiment)
-                VALUES (%s,%s,%s,%s,%s)
+                    (dpx_comparison, taxonomy_id, `condition`, dose, dynaprot_experiment, is_hidden)
+                VALUES (%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     dpx_comp_id,
@@ -159,6 +176,7 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
                     _replace_missing(params.get("condition")),
                     comp_name,
                     dpx_id,
+                    is_hidden,
                 ),
             )
 
