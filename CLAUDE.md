@@ -23,16 +23,23 @@ This repo manages the MySQL database (`dynaprotdbv2`) for the [DynaProt/DSPAtlas
 
 ```bash
 # Ingest all experiment folders under a root directory (recursive):
-uv run dspa-ingest /path/to/data/root
+uv run dspa-ingest /path/to/data/root --user-id 42
 
 # Ingest a single experiment folder:
-uv run dspa-ingest /path/to/LiP_School9_LiP
+uv run dspa-ingest /path/to/LiP_School9_LiP --user-id 42
 
 # Preview what would be ingested without writing to the DB:
-uv run dspa-ingest /path/to/data/root --dry-run
+uv run dspa-ingest /path/to/data/root --user-id 42 --dry-run
 ```
 
 The CLI walks the tree, finds every subfolder containing a `params.yaml`, and runs the full ingestion pipeline (metadata → differential abundance → GO analysis → protein scores) for each.
+
+The required `--user-id` is a trusted existing numeric owner, applied to all five
+experiment-data tables. Imports require the ownership extension from the main
+DSPA database image; the local Docker baseline alone has no owner columns. The
+CLI uses `dspa.ownership.bound_connection` and the `dspa_import` writable views.
+It creates an owned import record or accepts `--import-id` after checking owner
+and running status. Archive metadata never chooses these IDs.
 
 The old shell-based upload to the remote VM lives in `uploadNewExperiment/` (kept for reference).
 
@@ -41,12 +48,20 @@ The old shell-based upload to the remote VM lives in `uploadNewExperiment/` (kep
 All scripts expect these environment variables (never hardcode credentials):
 
 ```bash
-export MYSQL_USER=root
+export MYSQL_USER=dspa_importer
 export MYSQL_PASSWORD=...
 export MYSQL_HOST=127.0.0.1
 export MYSQL_PORT=3307
-export MYSQL_DATABASE=dynaprotdbv2
+export MYSQL_DATABASE=dspa_import
+export DSPA_IDENTITY_DB_USER=dspa_user_manager
+export DSPA_IDENTITY_DB_PASSWORD=...
+export DSPA_CONTEXT_DB_USER=dspa_context_manager
+export DSPA_CONTEXT_DB_PASSWORD=...
 ```
+
+Use separate administrative credentials and `MYSQL_DATABASE=dynaprotdbv2` for
+reference-data commands. `MYSQL_UNIX_SOCKET` is optional for local tests. Never
+pass root credentials to the web importer.
 
 ## Architecture
 
@@ -54,20 +69,21 @@ export MYSQL_DATABASE=dynaprotdbv2
 
 The canonical code lives in the `src/dspa/` package:
 
-- **`db.py`** — `get_connection()` loads `.env` via `python-dotenv` and returns a MySQL connection
-- **`ingest.py`** — `ingest_experiment(folder, connection)` handles one experiment folder end-to-end:
+- **`db.py`** — shared server configuration and administrative reference-data connections
+- **`ownership.py`** — trusted identity resolution, scoped connections, global ID allocation, and owned import records; data/control connections must share a server UUID; binds refresh before SQL and are cleared on disposal
+- **`ingest.py`** — `ingest_experiment(folder, connection, user_id=owner_id, import_id=import_id, dpx_id=allocated_id)` handles one experiment folder end-to-end:
   - reads `params.yaml` → inserts `dynaprot_experiment` + `dynaprot_experiment_comparison` rows
   - reads `differential_abundance_{comp_id}_{comp_name}.tsv` → bulk-inserts into `differential_abundance`
-  - reads `go_term_{comp_id}_{comp_name}.csv` (tab-delimited) → bulk-inserts into `go_analysis`
+  - reads `go_term_{comp_id}_{comp_name}.tsv` → bulk-inserts into `go_analysis`
   - computes protein scores in-memory from the DA rows → inserts into `protein_scores`
-  - commits once per folder
-- **`cli.py`** — Click CLI (`dspa-ingest`); walks a root directory for `params.yaml` files, calls `ingest_experiment` for each
+  - commits once per folder, rolls back on failures and closes the cursor in `finally`
+- **`cli.py`** — Click CLI (`dspa-ingest`); walks a root directory for `params.yaml` files, allocates IDs and ingests each folder on a bound connection; finalizes `succeeded`/`partial`/`failed` status, with SIGTERM cleanup
 
 Score formula: `-log10(adj_pval + 1e-10) + |diff|`, accumulated per protein, only for rows where `adj_pval < 0.05` and `|diff| > 0.2`.
 
 ### ID Scheme
 
-- Experiment ID: `DPX000001` (auto-incremented from `MAX(dynaprot_experiment)`)
+- Experiment ID: `DPX000001` (reserved by `dspa_security.allocate_experiment_id` on a dedicated autocommit session; gaps after failures are expected)
 - Comparison ID: `DPX000001-COMP01` (concatenated from `dpx_id` + `-` + comp_id from `params.yaml`)
 
 ### Schema

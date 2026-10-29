@@ -39,7 +39,11 @@ This starts:
 
 Adminer login: server `mysql`, user `dspa`, password `dspa`, database `dynaprotdbv2`.
 
-The default `.env.example` credentials match this Docker setup, so no edits are needed for local development.
+This is the legacy shared-schema development stack. It supports reference-data
+work with its administrative credentials; it does not provide the ownership
+schema, scoped importer account, or control accounts required by ingestion.
+For the complete importer use the main DSPA database stack and provision the
+credentials shown in `.env.example`.
 
 ```bash
 docker compose down          # stop containers (data persisted in Docker volume)
@@ -48,30 +52,94 @@ docker compose down -v       # stop and wipe the database volume
 
 ## Ingesting Experiments
 
+Imports require the per-user schema installed by the main DSPA database image,
+an active numeric ID from `users`, and all three account credentials in
+`.env.example`. Set `MYSQL_DATABASE=dspa_import` and use `dspa_importer` as the
+data account. The identity and context accounts execute their narrow management
+procedures through separate connections to the same MySQL server.
+
 An experiment folder must contain a `params.yaml` file plus one or more data files per comparison:
 - `differential_abundance_{comp_id}_{comparison_name}.tsv`
-- `go_term_{comp_id}_{comparison_name}.csv` *(tab-delimited)*
+- `go_term_{comp_id}_{comparison_name}.tsv`
 - `qc_plots.pdf` *(optional)*
 
 ```bash
 # Ingest a single experiment folder
-uv run dspa-ingest /path/to/LiP_School9_LiP
+uv run dspa-ingest /path/to/LiP_School9_LiP --user-id 42
 
 # Ingest all experiments found recursively under a root directory
-uv run dspa-ingest /path/to/data/root
+uv run dspa-ingest /path/to/data/root --user-id 42
 
 # Preview what would be ingested without writing anything to the database
-uv run dspa-ingest /path/to/data/root --dry-run
+uv run dspa-ingest /path/to/data/root --user-id 42 --dry-run
 
 # Point at a specific .env file (defaults to .env in the repo root)
-uv run dspa-ingest /path/to/data/root --env-file /path/to/.env.production
+uv run dspa-ingest /path/to/data/root --user-id 42 --env-file /path/to/.env.production
+
+# Web workers pass the already-created import record; it must belong to user 42
+uv run dspa-ingest /path/to/data/root --user-id 42 --import-id 123
 ```
 
-Each folder is ingested in a single transaction: experiment metadata, comparisons, differential abundance, GO analysis, and protein scores are all committed together or not at all.
+`--user-id` is required, including for previews, and must be between 1 and
+4294967295 (`INT UNSIGNED`). Every experiment, comparison, differential-abundance,
+GO-analysis, and protein-score row receives this owner. Ownership fields in uploaded
+metadata are ignored. The existing publication/DOI rules for `is_hidden` still apply.
+
+The caller must obtain this ID from authenticated server context or a trusted
+administrative invocation. The CLI binds the actual data connection to this owner
+using the separate context account. Both connections must report the same MySQL
+server UUID. Scoped writable views enforce the owner with `WITH CHECK OPTION`;
+the importer account has no direct privileges on private base tables. The CLI
+does not authenticate an arbitrary human who has access to its service credentials.
+
+Each run creates an owned `imports` record unless `--import-id` supplies an
+existing running record owned by the same user. Every experiment links to it.
+Each folder commits as one transaction and rolls back on errors or interruption.
+Earlier committed folders survive a later failure: the record becomes `partial`
+when any experiment committed, otherwise `failed`. Successful runs become
+`succeeded`; repeated finalization preserves an existing terminal status.
+
+Experiment IDs are reserved through `dspa_security.allocate_experiment_id` on a
+separate autocommit connection. Failed imports may leave gaps. Archive fields
+cannot choose an owner, import record, or experiment ID.
+
+`dspa.ownership` exposes the shared synchronous APIs used by the CLI and web
+importer: `resolve_user(issuer, subject)`, `bound_connection(user_id)`,
+`create_import(user_id, filename)`, `get_import(user_id, import_id)`, and
+`finish_import(user_id, import_id, failed=False, diagnostic="")`. They accept an
+optional `env_file`. Identity resolution requires a previously verified OIDC
+issuer and subject. `get_import` returns metadata and the committed experiment
+count; `finish_import` returns the terminal status. Stored failure diagnostics use
+fixed safe messages, never raw database or subprocess errors.
+
+Bindings refresh before SQL statements and commit, with a maximum one-hour lease.
+Connections are never pooled or reconnected. Normal exit, Python exceptions, and
+SIGTERM attempt rollback, context removal, and connection disposal. After a hard
+kill, MySQL closes the session and any surviving context expires; its thread ID
+cannot authorize a replacement connection. A parent worker should finalize the
+import after waiting for the terminated child.
+
+Run the CLI and ingestion regression tests after installing the project dependencies:
+
+```bash
+uv run python -m unittest discover -s tests -v
+```
+
+`tests/test_mysql_import.py` additionally uses disposable socket-only MySQL when
+local `mysqld`/`mysql` binaries and the sibling `dspa-mcp` checkout are available.
+It runs the real CLI with scoped service credentials and verifies isolation,
+partial imports, and context cleanup. Otherwise it reports an explicit skip.
+The HTTP-to-subprocess flow is covered by the sibling project's
+`tests/test_importer_flow.py`; run it from `dspa-mcp` with
+`importer/.venv/bin/python -m unittest discover -s tests -p test_importer_flow.py -v`.
 
 ## Populating Reference Tables
 
 `go_term`, `organism_proteome`, and `organism_proteome_entries` are reference data that can be populated in two ways:
+
+Use a separate administrative `--env-file` for these commands, with
+`MYSQL_DATABASE=dynaprotdbv2` and reference-table write privileges. The scoped
+importer credentials intentionally cannot populate reference tables.
 
 ### Option A — from a mysqldump
 

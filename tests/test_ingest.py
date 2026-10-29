@@ -1,0 +1,203 @@
+"""Ownership regression tests using actual archive parsing and captured SQL."""
+from __future__ import annotations
+
+import re
+import tempfile
+import unittest
+from collections import defaultdict
+from pathlib import Path
+from unittest.mock import MagicMock
+
+import yaml
+
+from dspa.ingest import ingest_experiment
+
+
+class IngestOwnershipTests(unittest.TestCase):
+    def setUp(self):
+        temporary_directory = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary_directory.cleanup)
+        self.folder = Path(temporary_directory.name)
+
+    def write_experiment(self, publication=None, doi=None):
+        params = {
+            "taxonomy_id": 9606,
+            "dpx_comparison": ["1", "2"],
+            "comparison": ["treated/control", "second"],
+            "publication": publication,
+            "doi": doi,
+            "user_id": 999,
+            "owner_id": 998,
+            "is_hidden": False,
+        }
+        (self.folder / "params.yaml").write_text(yaml.safe_dump(params))
+        for comparison_id, name in zip(params["dpx_comparison"], params["comparison"]):
+            suffix = f"{comparison_id}_{name.replace('/', '_')}.tsv"
+            (self.folder / f"differential_abundance_{suffix}").write_text(
+                "pg_protein_accessions\teg_modified_peptide\tstart\tend\tdiff\tadj_pval\tpval\tuser_id\n"
+                "P12345\tPEPTIDE\t1\t7\t1.5\t0.01\t0.005\t997\n"
+                "P67890\tANOTHER\t8\t14\t-1.0\t0.02\t0.01\t996\n"
+            )
+            (self.folder / f"go_term_{suffix}").write_text(
+                "term\tgo_id\tpval\tadj_pval\tn_detected_proteins\t"
+                "n_detected_proteins_in_process\tn_significant_proteins\t"
+                "n_significant_proteins_in_process\tn_proteins_expected\t"
+                "enrichment_type\tgo_type\tuser_id\n"
+                "example process\tGO:0000001\t0.01\t0.02\t2\t1\t2\t1\t1\t"
+                "overrepresented\tBP\t995\n"
+            )
+
+    def connection(self):
+        connection = MagicMock()
+        connection.cursor.return_value.fetchone.return_value = (None,)
+        return connection
+
+    def inserted_rows(self, connection):
+        """Decode SQL bindings so a wrong column or placeholder fails the test."""
+        rows = defaultdict(list)
+        for call in connection.cursor.return_value.method_calls:
+            method, arguments, _ = call
+            if method not in {"execute", "executemany"}:
+                continue
+            statement = arguments[0]
+            if statement.lstrip().startswith("SELECT"):
+                continue
+            match = re.fullmatch(
+                r"\s*INSERT INTO (\w+)\s*\((.*?)\)\s*VALUES\s*\((.*?)\)\s*",
+                statement,
+                flags=re.DOTALL,
+            )
+            self.assertIsNotNone(match, statement)
+            table, columns, placeholders = match.groups()
+            columns = [column.strip().strip("`") for column in columns.split(",")]
+            placeholders = [placeholder.strip() for placeholder in placeholders.split(",")]
+            self.assertEqual(len(columns), len(placeholders))
+            parameters = [arguments[1]] if method == "execute" else arguments[1]
+            for parameter in parameters:
+                if isinstance(parameter, dict):
+                    keys = []
+                    for placeholder in placeholders:
+                        key = re.fullmatch(r"%\((\w+)\)s", placeholder)
+                        self.assertIsNotNone(key, placeholder)
+                        keys.append(key.group(1))
+                    values = [parameter[key] for key in keys]
+                else:
+                    self.assertEqual(placeholders, ["%s"] * len(columns))
+                    self.assertEqual(len(parameter), len(columns))
+                    values = parameter
+                rows[table].append(dict(zip(columns, values)))
+        return dict(rows)
+
+    def test_every_private_row_uses_supplied_owner_despite_archive_metadata(self):
+        self.write_experiment()
+        expected_counts = {
+            "dynaprot_experiment": 1,
+            "dynaprot_experiment_comparison": 2,
+            "differential_abundance": 4,
+            "go_analysis": 2,
+            "protein_scores": 4,
+        }
+        for owner in (1, 73, 4294967295):
+            with self.subTest(user_id=owner, import_id=41, dpx_id="DPX000001"):
+                connection = self.connection()
+                experiment_id = ingest_experiment(self.folder, connection, user_id=owner, import_id=41, dpx_id="DPX000001")
+                rows = self.inserted_rows(connection)
+                self.assertEqual(experiment_id, "DPX000001")
+                self.assertEqual({table: len(data) for table, data in rows.items()}, expected_counts)
+                for table, data in rows.items():
+                    for row in data:
+                        self.assertEqual(row["user_id"], owner, table)
+                self.assertEqual(rows["dynaprot_experiment"][0]["import_id"], 41)
+                connection.commit.assert_called_once_with()
+                connection.cursor.return_value.close.assert_called_once_with()
+
+    def test_visibility_still_follows_publication_and_doi(self):
+        cases = (
+            (None, None, True),
+            (" Unpublished ", None, True),
+            (" NA ", "", True),
+            ("A published paper", None, False),
+            (None, "10.1234/example", False),
+            ("unpublished", "10.1234/example", False),
+        )
+        for publication, doi, expected_hidden in cases:
+            with self.subTest(publication=publication, doi=doi):
+                self.write_experiment(publication=publication, doi=doi)
+                connection = self.connection()
+                ingest_experiment(self.folder, connection, user_id=73, import_id=41, dpx_id="DPX000001")
+                rows = self.inserted_rows(connection)
+                for table in ("dynaprot_experiment", "dynaprot_experiment_comparison"):
+                    for row in rows[table]:
+                        self.assertIs(row["is_hidden"], expected_hidden)
+
+    def test_invalid_user_id_fails_before_file_or_database_access(self):
+        invalid_ids = (None, True, False, 0, -1, 4294967296, "73", 73.0, [], {})
+        for user_id in invalid_ids:
+            for dry_run in (False, True):
+                with self.subTest(user_id=user_id, dry_run=dry_run):
+                    folder = MagicMock(spec=Path)
+                    connection = MagicMock()
+                    with self.assertRaisesRegex(ValueError, "user_id"):
+                        ingest_experiment(folder, connection, dry_run=dry_run, user_id=user_id, import_id=41, dpx_id="DPX000001")
+                    self.assertEqual(folder.mock_calls, [])
+                    self.assertEqual(connection.mock_calls, [])
+
+    def test_user_id_is_required_and_keyword_only(self):
+        folder = MagicMock(spec=Path)
+        connection = MagicMock()
+        with self.assertRaises(TypeError):
+            ingest_experiment(folder, connection, import_id=41, dpx_id="DPX000001")
+        with self.assertRaises(TypeError):
+            ingest_experiment(folder, connection, False, 73)
+        self.assertEqual(folder.mock_calls, [])
+        self.assertEqual(connection.mock_calls, [])
+
+    def test_invalid_import_and_allocated_ids_fail_before_io(self):
+        for import_id, dpx_id in ((0, "DPX000001"), (True, "DPX000001"),
+                                   (18446744073709551616, "DPX000001"),
+                                   (41, "forged"), (41, None)):
+            with self.subTest(import_id=import_id, dpx_id=dpx_id):
+                folder = MagicMock(spec=Path)
+                connection = MagicMock()
+                with self.assertRaises(ValueError):
+                    ingest_experiment(folder, connection, user_id=73,
+                                      import_id=import_id, dpx_id=dpx_id)
+                self.assertEqual(folder.mock_calls, [])
+                self.assertEqual(connection.mock_calls, [])
+
+    def test_database_failure_and_interrupt_roll_back_the_experiment(self):
+        self.write_experiment()
+        for failure in (RuntimeError("database failed"), KeyboardInterrupt()):
+            with self.subTest(error=type(failure).__name__):
+                connection = self.connection()
+                connection.cursor.return_value.executemany.side_effect = failure
+                with self.assertRaises(type(failure)):
+                    ingest_experiment(self.folder, connection, user_id=73,
+                                      import_id=41, dpx_id="DPX000001")
+                connection.rollback.assert_called_once_with()
+                connection.commit.assert_not_called()
+                connection.cursor.return_value.close.assert_called_once_with()
+
+    def test_supplied_id_is_used_without_reading_maximum(self):
+        self.write_experiment()
+        connection = self.connection()
+        result = ingest_experiment(self.folder, connection, user_id=73,
+                                   import_id=41, dpx_id="DPX1000001")
+        self.assertEqual(result, "DPX1000001")
+        rows = self.inserted_rows(connection)
+        self.assertEqual(rows["dynaprot_experiment"][0]["dynaprot_experiment"], result)
+        self.assertEqual({row["dynaprot_experiment"] for row in rows["dynaprot_experiment_comparison"]},
+                         {result})
+        for call in connection.cursor.return_value.execute.call_args_list:
+            self.assertNotIn("SELECT", call.args[0].upper())
+
+    def test_valid_dry_run_does_not_insert_or_commit(self):
+        self.write_experiment()
+        connection = self.connection()
+        ingest_experiment(self.folder, connection, dry_run=True, user_id=73, import_id=41, dpx_id="DPX000001")
+        self.assertEqual(self.inserted_rows(connection), {})
+        connection.commit.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()

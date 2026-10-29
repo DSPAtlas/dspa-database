@@ -1,16 +1,22 @@
 """CLI entry points for dspa tooling.
 
-dspa-ingest   ROOT [--dry-run] [--env-file]
+dspa-ingest   ROOT --user-id USER_ID [--dry-run] [--env-file]
 dspa-import-dump  DUMP [--truncate] [--env-file]
 """
 from __future__ import annotations
 
+import signal
+import threading
+from contextlib import contextmanager, suppress
 from pathlib import Path
 
 import click
 
 from dspa.db import get_connection
 from dspa.ingest import ingest_experiment
+from dspa.ownership import (
+    allocate_experiment_id, bound_connection, create_import, finish_import, get_import,
+)
 from dspa.dump import import_reference_tables, REFERENCE_TABLES
 from dspa.uniprot import populate_reference_tables
 
@@ -21,17 +27,34 @@ def _find_experiment_folders(root: Path) -> list[Path]:
     return sorted(p.parent for p in root.rglob("params.yaml"))
 
 
+@contextmanager
+def _handle_termination():
+    """Let SIGTERM unwind transactions; SIGKILL still relies on socket closure."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def interrupted(*_):
+        raise InterruptedError("Import cancelled")
+
+    previous = signal.signal(signal.SIGTERM, interrupted)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
 @click.command()
 @click.argument("root", type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.option("--user-id", type=click.IntRange(1, 4294967295), required=True,
+              help="Existing database user ID that owns every experiment in this import.")
+@click.option("--import-id", type=click.IntRange(1, 18446744073709551615), default=None,
+              help="An existing running import owned by this user; otherwise create one.")
 @click.option("--dry-run", is_flag=True, help="Preview folders to be ingested; do not write to DB.")
 @click.option("--env-file", type=click.Path(exists=True, path_type=Path), default=None,
               help="Path to .env file (default: .env in repo root).")
-def main(root: Path, dry_run: bool, env_file: Path | None) -> None:
+def main(root: Path, user_id: int, import_id: int | None, dry_run: bool, env_file: Path | None) -> None:
     folders = _find_experiment_folders(root)
-
-    if not folders:
-        click.echo(f"No experiment folders (containing params.yaml) found under {root}")
-        return
 
     click.echo(f"Found {len(folders)} experiment folder(s):")
     for f in folders:
@@ -41,16 +64,39 @@ def main(root: Path, dry_run: bool, env_file: Path | None) -> None:
         click.echo("\n--dry-run: no data written.")
         return
 
-    connection = get_connection(env_file)
-    try:
-        for folder in folders:
-            click.echo(f"\nIngesting {folder} …")
-            dpx_id = ingest_experiment(folder, connection, dry_run=False)
-            click.echo(f"  -> {dpx_id}")
-    finally:
-        connection.close()
+    with _handle_termination():
+        diagnostic = "ingestion failed"
+        try:
+            if import_id is None:
+                import_id = create_import(user_id, root.name, env_file=env_file)
+            record = get_import(user_id, import_id, env_file=env_file)
+            if record["status"] != "running":
+                raise ValueError("Import has already finished")
+            click.echo(f"Import {import_id}")
+            if not folders:
+                diagnostic = "empty archive"
+                raise ValueError("No experiment folders found")
+            with bound_connection(user_id, env_file=env_file) as connection:
+                for folder in folders:
+                    click.echo(f"\nIngesting {folder} …")
+                    dpx_id = allocate_experiment_id(env_file=env_file)
+                    ingest_experiment(folder, connection, dry_run=False, user_id=user_id,
+                                      import_id=import_id, dpx_id=dpx_id)
+                    click.echo(f"  -> {dpx_id}")
+            status = finish_import(user_id, import_id, env_file=env_file)
+        except BaseException as error:
+            interrupted = isinstance(error, (KeyboardInterrupt, InterruptedError))
+            if import_id is not None:
+                with suppress(Exception):
+                    finish_import(user_id, import_id, failed=True,
+                                  diagnostic="cancelled" if interrupted else diagnostic,
+                                  env_file=env_file)
+            if isinstance(error, SystemExit):
+                raise
+            message = "Import interrupted." if interrupted else "Import failed; consult its import status."
+            raise click.ClickException(message) from None
 
-    click.echo("\nDone.")
+    click.echo(f"\nDone: {status}.")
 
 
 @click.command("import-dump")

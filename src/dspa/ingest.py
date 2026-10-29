@@ -2,15 +2,19 @@
 
 An experiment folder must contain params.yaml and one or more pairs of:
   differential_abundance_{comp_id}_{comparison_name}.tsv
-  go_term_{comp_id}_{comparison_name}.csv  (tab-delimited despite .csv extension)
+  go_term_{comp_id}_{comparison_name}.tsv
 """
 from __future__ import annotations
 
 import math
+import re
+from contextlib import suppress
 from pathlib import Path
 
 import pandas as pd
 import yaml
+
+from dspa.ownership import validate_import_id, validate_user_id
 
 
 # ---------------------------------------------------------------------------
@@ -37,13 +41,6 @@ def _has_no_publication(publication, doi) -> bool:
     pub_missing = publication is None or str(publication).strip().lower() == "unpublished"
     doi_missing = doi is None
     return pub_missing and doi_missing
-
-
-def _generate_next_id(cursor, table: str, column: str, prefix: str) -> str:
-    cursor.execute(f"SELECT MAX({column}) FROM {table}")
-    result = cursor.fetchone()[0]
-    num = int(result.replace(prefix, "")) + 1 if result else 1
-    return f"{prefix}{num:06d}"
 
 
 def _get_diff_value(row: pd.Series):
@@ -79,8 +76,13 @@ def _compute_protein_scores(da_rows: list[dict]) -> dict[str, float]:
 # Main ingestion entry point
 # ---------------------------------------------------------------------------
 
-def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
+def ingest_experiment(
+    folder: Path, connection, dry_run: bool = False, *, user_id: int, import_id: int, dpx_id: str
+) -> str:
     """Ingest one experiment folder. Returns the assigned dpx_id.
+
+    The caller supplies the owner, owned import record, and reserved experiment
+    ID. Ownership metadata in the input is ignored. Use a bound connection.
 
     Inserts into:
       dynaprot_experiment
@@ -89,6 +91,11 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
       go_analysis                     (one row per GO term per comparison)
       protein_scores                  (one row per protein per comparison)
     """
+    validate_user_id(user_id)
+    validate_import_id(import_id)
+    if not isinstance(dpx_id, str) or not re.fullmatch(r"DPX[0-9]{6,8}", dpx_id):
+        raise ValueError("dpx_id must be an allocated experiment ID")
+
     params_file = folder / "params.yaml"
     if not params_file.exists():
         raise FileNotFoundError(f"No params.yaml in {folder}")
@@ -103,166 +110,175 @@ def ingest_experiment(folder: Path, connection, dry_run: bool = False) -> str:
 
     cursor = connection.cursor()
 
-    dpx_id = _generate_next_id(cursor, "dynaprot_experiment", "dynaprot_experiment", "DPX")
-
-    publication = _replace_missing(params.get("publication"))
-    doi = _replace_missing(params.get("doi"))
-    is_hidden = _has_no_publication(publication, doi)
-
-    if not dry_run:
-        cursor.execute(
-            """
-            INSERT INTO dynaprot_experiment (
-                dynaprot_experiment, perturbation, `condition`, taxonomy_id, strain,
-                instrument, number_of_lip_files, number_of_tr_files, experiment,
-                approach, reference_for_protocol, data_analysis, publication, doi,
-                search_settings, fasta, data_re_analysis_settings, path_to_raw_files,
-                digestion_protocol, e_s_ratio, pk_digestion_time_in_sec, protease,
-                author, input_file, qc_pdf_file, is_hidden
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-            """,
-            (
-                dpx_id,
-                _replace_missing(params.get("perturbation")),
-                _replace_missing(params.get("condition")),
-                int(params.get("taxonomy_id", 0)),
-                _replace_missing(params.get("strain")),
-                _replace_missing(params.get("instrument")),
-                int(params.get("n_files", 0)),
-                int(params.get("n_files_trp", 0)),
-                _replace_missing(params.get("experiment")),
-                _replace_missing(params.get("approach")),
-                _replace_missing(params.get("reference_to_protocol")),
-                _replace_missing(params.get("data_analysis")),
-                publication,
-                doi,
-                _replace_missing(params.get("search_settings")),
-                _replace_missing(params.get("fasta")),
-                _replace_missing(params.get("data_reanalysis_settings")),
-                _replace_missing(params.get("path_to_raw_files")),
-                _replace_missing(params.get("digestion_protocol")),
-                _replace_missing(params.get("e_s_ratio")),
-                _replace_missing(params.get("pk_digestion_time")),
-                _replace_missing(params.get("protease")),
-                _replace_missing(params.get("author")),
-                _replace_missing(params.get("input_file")),
-                pdf_data,
-                is_hidden,
-            ),
-        )
-
-    comp_ids: list[str] = params.get("dpx_comparison", [])
-    comp_names: list[str] = params.get("comparison", [])
-
-    if len(comp_ids) != len(comp_names):
-        raise ValueError(
-            f"{folder}: dpx_comparison and comparison lists have different lengths"
-        )
-
-    for comp_id, comp_name in zip(comp_ids, comp_names):
-        dpx_comp_id = f"{dpx_id}-{comp_id}"
-        comp_name_safe = comp_name.replace("/", "_")
+    try:
+        publication = _replace_missing(params.get("publication"))
+        doi = _replace_missing(params.get("doi"))
+        is_hidden = _has_no_publication(publication, doi)
 
         if not dry_run:
             cursor.execute(
                 """
-                INSERT INTO dynaprot_experiment_comparison
-                    (dpx_comparison, taxonomy_id, `condition`, dose, dynaprot_experiment, is_hidden)
-                VALUES (%s,%s,%s,%s,%s,%s)
+                INSERT INTO dynaprot_experiment (
+                    dynaprot_experiment, perturbation, `condition`, taxonomy_id, strain,
+                    instrument, number_of_lip_files, number_of_tr_files, experiment,
+                    approach, reference_for_protocol, data_analysis, publication, doi,
+                    search_settings, fasta, data_re_analysis_settings, path_to_raw_files,
+                    digestion_protocol, e_s_ratio, pk_digestion_time_in_sec, protease,
+                    author, input_file, qc_pdf_file, is_hidden, user_id, import_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
-                    dpx_comp_id,
-                    int(params.get("taxonomy_id", 0)),
-                    _replace_missing(params.get("condition")),
-                    comp_name,
                     dpx_id,
+                    _replace_missing(params.get("perturbation")),
+                    _replace_missing(params.get("condition")),
+                    int(params.get("taxonomy_id", 0)),
+                    _replace_missing(params.get("strain")),
+                    _replace_missing(params.get("instrument")),
+                    int(params.get("n_files", 0)),
+                    int(params.get("n_files_trp", 0)),
+                    _replace_missing(params.get("experiment")),
+                    _replace_missing(params.get("approach")),
+                    _replace_missing(params.get("reference_to_protocol")),
+                    _replace_missing(params.get("data_analysis")),
+                    publication,
+                    doi,
+                    _replace_missing(params.get("search_settings")),
+                    _replace_missing(params.get("fasta")),
+                    _replace_missing(params.get("data_reanalysis_settings")),
+                    _replace_missing(params.get("path_to_raw_files")),
+                    _replace_missing(params.get("digestion_protocol")),
+                    _replace_missing(params.get("e_s_ratio")),
+                    _replace_missing(params.get("pk_digestion_time")),
+                    _replace_missing(params.get("protease")),
+                    _replace_missing(params.get("author")),
+                    _replace_missing(params.get("input_file")),
+                    pdf_data,
                     is_hidden,
+                    user_id,
+                    import_id,
                 ),
             )
 
-        # -- differential abundance --
-        da_file = folder / f"differential_abundance_{comp_id}_{comp_name_safe}.tsv"
-        da_rows: list[dict] = []
-        if da_file.exists():
-            df = pd.read_csv(da_file, sep="\t").where(pd.notnull, None)
-            if "start" in df.columns:
-                df = df.rename(columns={"start": "pos_start", "end": "pos_end"})
-            for _, row in df.iterrows():
-                da_rows.append(
-                    {
-                        "dpx_comparison": dpx_comp_id,
-                        "pg_protein_accessions": _replace_missing(row.get("pg_protein_accessions")),
-                        "pep_grouping_key": _replace_missing(row.get("eg_modified_peptide")),
-                        "pos_start": _replace_missing(row.get("pos_start")),
-                        "pos_end": _replace_missing(row.get("pos_end")),
-                        "diff": _replace_missing(_get_diff_value(row)),
-                        "adj_pval": _replace_missing(row.get("adj_pval")),
-                        "pval": _replace_missing(row.get("pval")),
-                    }
-                )
-            if not dry_run:
-                cursor.executemany(
-                    """
-                    INSERT INTO differential_abundance
-                        (dpx_comparison, pg_protein_accessions, pep_grouping_key,
-                         pos_start, pos_end, diff, adj_pval, pval)
-                    VALUES (%(dpx_comparison)s, %(pg_protein_accessions)s, %(pep_grouping_key)s,
-                            %(pos_start)s, %(pos_end)s, %(diff)s, %(adj_pval)s, %(pval)s)
-                    """,
-                    da_rows,
-                )
+        comp_ids: list[str] = params.get("dpx_comparison", [])
+        comp_names: list[str] = params.get("comparison", [])
 
-        # -- GO analysis --
-        go_file = folder / f"go_term_{comp_id}_{comp_name_safe}.tsv"
-        if go_file.exists():
-            df = pd.read_csv(go_file, sep="\t").where(pd.notnull, None)
-            go_rows = [
-                {
-                    "dpx_comparison": dpx_comp_id,
-                    "term": _replace_missing(row.get("term")),
-                    "go_id": _replace_missing(str(row["go_id"]).strip("[]")) if row.get("go_id") else None,
-                    "pval": _replace_missing(row.get("pval")),
-                    "adj_pval": _replace_missing(row.get("adj_pval")),
-                    "n_detected_proteins": _replace_missing(row.get("n_detected_proteins")),
-                    "n_detected_proteins_in_process": _replace_missing(row.get("n_detected_proteins_in_process")),
-                    "n_significant_proteins": _replace_missing(row.get("n_significant_proteins")),
-                    "n_significant_proteins_in_process": _replace_missing(row.get("n_significant_proteins_in_process")),
-                    "n_proteins_expected": _replace_missing(row.get("n_proteins_expected")),
-                    "enrichment_type": _replace_missing(row.get("enrichment_type")),
-                    "go_type": _replace_missing(row.get("go_type")),
-                }
-                for _, row in df.iterrows()
-            ]
-            if not dry_run:
-                cursor.executemany(
-                    """
-                    INSERT INTO go_analysis
-                        (dpx_comparison, term, go_id, pval, adj_pval,
-                         n_detected_proteins, n_detected_proteins_in_process,
-                         n_significant_proteins, n_significant_proteins_in_process,
-                         n_proteins_expected, enrichment_type, go_type)
-                    VALUES (%(dpx_comparison)s, %(term)s, %(go_id)s, %(pval)s, %(adj_pval)s,
-                            %(n_detected_proteins)s, %(n_detected_proteins_in_process)s,
-                            %(n_significant_proteins)s, %(n_significant_proteins_in_process)s,
-                            %(n_proteins_expected)s, %(enrichment_type)s, %(go_type)s)
-                    """,
-                    go_rows,
-                )
-
-        # -- protein scores (computed from differential abundance rows) --
-        scores = _compute_protein_scores(da_rows)
-        if scores and not dry_run:
-            cursor.executemany(
-                """
-                INSERT INTO protein_scores
-                    (pg_protein_accessions, protein_description, cumulativeScore, dpx_comparison)
-                VALUES (%s, %s, %s, %s)
-                """,
-                [(acc, None, score, dpx_comp_id) for acc, score in scores.items()],
+        if len(comp_ids) != len(comp_names):
+            raise ValueError(
+                f"{folder}: dpx_comparison and comparison lists have different lengths"
             )
 
-    if not dry_run:
-        connection.commit()
+        for comp_id, comp_name in zip(comp_ids, comp_names):
+            dpx_comp_id = f"{dpx_id}-{comp_id}"
+            comp_name_safe = comp_name.replace("/", "_")
 
-    cursor.close()
+            if not dry_run:
+                cursor.execute(
+                    """
+                    INSERT INTO dynaprot_experiment_comparison
+                        (dpx_comparison, taxonomy_id, `condition`, dose, dynaprot_experiment, is_hidden, user_id)
+                    VALUES (%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (
+                        dpx_comp_id,
+                        int(params.get("taxonomy_id", 0)),
+                        _replace_missing(params.get("condition")),
+                        comp_name,
+                        dpx_id,
+                        is_hidden,
+                        user_id,
+                    ),
+                )
+
+            # -- differential abundance --
+            da_file = folder / f"differential_abundance_{comp_id}_{comp_name_safe}.tsv"
+            da_rows: list[dict] = []
+            if da_file.exists():
+                df = pd.read_csv(da_file, sep="\t").where(pd.notnull, None)
+                if "start" in df.columns:
+                    df = df.rename(columns={"start": "pos_start", "end": "pos_end"})
+                for _, row in df.iterrows():
+                    da_rows.append(
+                        {
+                            "dpx_comparison": dpx_comp_id,
+                            "pg_protein_accessions": _replace_missing(row.get("pg_protein_accessions")),
+                            "pep_grouping_key": _replace_missing(row.get("eg_modified_peptide")),
+                            "pos_start": _replace_missing(row.get("pos_start")),
+                            "pos_end": _replace_missing(row.get("pos_end")),
+                            "diff": _replace_missing(_get_diff_value(row)),
+                            "adj_pval": _replace_missing(row.get("adj_pval")),
+                            "pval": _replace_missing(row.get("pval")),
+                            "user_id": user_id,
+                        }
+                    )
+                if not dry_run:
+                    cursor.executemany(
+                        """
+                        INSERT INTO differential_abundance
+                            (dpx_comparison, pg_protein_accessions, pep_grouping_key,
+                             pos_start, pos_end, diff, adj_pval, pval, user_id)
+                        VALUES (%(dpx_comparison)s, %(pg_protein_accessions)s, %(pep_grouping_key)s,
+                                %(pos_start)s, %(pos_end)s, %(diff)s, %(adj_pval)s, %(pval)s, %(user_id)s)
+                        """,
+                        da_rows,
+                    )
+
+            # -- GO analysis --
+            go_file = folder / f"go_term_{comp_id}_{comp_name_safe}.tsv"
+            if go_file.exists():
+                df = pd.read_csv(go_file, sep="\t").where(pd.notnull, None)
+                go_rows = [
+                    {
+                        "dpx_comparison": dpx_comp_id,
+                        "term": _replace_missing(row.get("term")),
+                        "go_id": _replace_missing(str(row["go_id"]).strip("[]")) if row.get("go_id") else None,
+                        "pval": _replace_missing(row.get("pval")),
+                        "adj_pval": _replace_missing(row.get("adj_pval")),
+                        "n_detected_proteins": _replace_missing(row.get("n_detected_proteins")),
+                        "n_detected_proteins_in_process": _replace_missing(row.get("n_detected_proteins_in_process")),
+                        "n_significant_proteins": _replace_missing(row.get("n_significant_proteins")),
+                        "n_significant_proteins_in_process": _replace_missing(row.get("n_significant_proteins_in_process")),
+                        "n_proteins_expected": _replace_missing(row.get("n_proteins_expected")),
+                        "enrichment_type": _replace_missing(row.get("enrichment_type")),
+                        "go_type": _replace_missing(row.get("go_type")),
+                        "user_id": user_id,
+                    }
+                    for _, row in df.iterrows()
+                ]
+                if not dry_run:
+                    cursor.executemany(
+                        """
+                        INSERT INTO go_analysis
+                            (dpx_comparison, term, go_id, pval, adj_pval,
+                             n_detected_proteins, n_detected_proteins_in_process,
+                             n_significant_proteins, n_significant_proteins_in_process,
+                             n_proteins_expected, enrichment_type, go_type, user_id)
+                        VALUES (%(dpx_comparison)s, %(term)s, %(go_id)s, %(pval)s, %(adj_pval)s,
+                                %(n_detected_proteins)s, %(n_detected_proteins_in_process)s,
+                                %(n_significant_proteins)s, %(n_significant_proteins_in_process)s,
+                                %(n_proteins_expected)s, %(enrichment_type)s, %(go_type)s, %(user_id)s)
+                        """,
+                        go_rows,
+                    )
+
+            # -- protein scores (computed from differential abundance rows) --
+            scores = _compute_protein_scores(da_rows)
+            if scores and not dry_run:
+                cursor.executemany(
+                    """
+                    INSERT INTO protein_scores
+                        (pg_protein_accessions, protein_description, cumulativeScore, dpx_comparison, user_id)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    [(acc, None, score, dpx_comp_id, user_id) for acc, score in scores.items()],
+                )
+
+        if not dry_run:
+            connection.commit()
+
+    except BaseException:
+        with suppress(Exception):
+            connection.rollback()
+        raise
+    finally:
+        cursor.close()
     return dpx_id
