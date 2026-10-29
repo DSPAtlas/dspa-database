@@ -14,7 +14,7 @@ import mysql.connector
 
 from dspa.db import connection_settings
 
-CONTEXT_TTL_SECONDS = 3600
+CONTEXT_TTL_SECONDS = 28_800
 _TERMINAL_STATUSES = {"succeeded", "failed", "partial"}
 _SAFE_DIAGNOSTICS = {
     "timeout": "Import exceeded its time limit.",
@@ -132,7 +132,7 @@ def bound_connection(user_id: int, env_file: Path | None = None):
 
     Control and data sessions must reach the same physical MySQL server. There is
     no reconnect or pool reuse. SIGKILL closes the socket; any surviving context
-    lease expires within one hour and cannot authorize a replacement thread.
+    lease expires within eight hours and cannot authorize a replacement thread.
     """
     validate_user_id(user_id)
     data = control = bound = None

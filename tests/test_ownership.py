@@ -30,7 +30,7 @@ class BoundConnectionTests(unittest.TestCase):
         binds = [args for args in self.control.cursor.return_value.execute.call_args_list
                  if "bind_context" in args.args[0]]
         self.assertEqual(binds, [call("CALL dspa_security.bind_context(%s,%s,%s,%s)",
-                                     (73, 101, 42, 3600))] * 4)
+                                     (73, 101, 42, 28_800))] * 4)
         self.control.cursor.return_value.execute.assert_any_call(
             "CALL dspa_security.clear_context(%s,%s)", (73, 101))
         self.data.rollback.assert_called_once_with()

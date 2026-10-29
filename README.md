@@ -112,7 +112,7 @@ issuer and subject. `get_import` returns metadata and the committed experiment
 count; `finish_import` returns the terminal status. Stored failure diagnostics use
 fixed safe messages, never raw database or subprocess errors.
 
-Bindings refresh before SQL statements and commit, with a maximum one-hour lease.
+Bindings refresh before SQL statements and commit, with an eight-hour lease.
 Connections are never pooled or reconnected. Normal exit, Python exceptions, and
 SIGTERM attempt rollback, context removal, and connection disposal. After a hard
 kill, MySQL closes the session and any surviving context expires; its thread ID
