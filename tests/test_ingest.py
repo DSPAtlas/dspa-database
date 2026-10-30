@@ -130,6 +130,146 @@ class IngestOwnershipTests(unittest.TestCase):
                     for row in rows[table]:
                         self.assertIs(row["is_hidden"], expected_hidden)
 
+    def test_organism_name_is_preserved_on_owned_experiment(self):
+        for name in ("  Escherichia coli  ", "Saccharomyces cerevisiae", "Organism ü", "x" * 255):
+            with self.subTest(name=name):
+                self.write_experiment()
+                params_path = self.folder / "params.yaml"
+                params = yaml.safe_load(params_path.read_text())
+                params["organism"] = name
+                params_path.write_text(yaml.safe_dump(params))
+                connection = self.connection()
+                ingest_experiment(self.folder, connection, user_id=73,
+                                  import_id=41, dpx_id="DPX000001")
+                rows = self.inserted_rows(connection)
+                experiment = rows["dynaprot_experiment"][0]
+                self.assertEqual(experiment["organism_name"], name.strip())
+                self.assertEqual(experiment["taxonomy_id"], 9606)
+                self.assertEqual(experiment["user_id"], 73)
+                self.assertNotIn("organism", rows)
+                connection.commit.assert_called_once_with()
+
+    def test_missing_organism_name_is_stored_as_null(self):
+        for value in (None, "", "  ", " NA ", "nan"):
+            with self.subTest(value=value):
+                self.write_experiment()
+                params_path = self.folder / "params.yaml"
+                params = yaml.safe_load(params_path.read_text())
+                if value is not None:
+                    params["organism"] = value
+                params_path.write_text(yaml.safe_dump(params))
+                connection = self.connection()
+                ingest_experiment(self.folder, connection, user_id=73,
+                                  import_id=41, dpx_id="DPX000001")
+                self.assertIsNone(self.inserted_rows(connection)["dynaprot_experiment"][0]["organism_name"])
+                connection.commit.assert_called_once_with()
+
+    def test_invalid_organism_name_rejects_experiment_without_commit(self):
+        for value in (9606, True, [], {"name": "Homo sapiens"}, "x" * 256):
+            for dry_run in (False, True):
+                with self.subTest(value=value, dry_run=dry_run):
+                    self.write_experiment()
+                    params_path = self.folder / "params.yaml"
+                    params = yaml.safe_load(params_path.read_text())
+                    params["organism"] = value
+                    params_path.write_text(yaml.safe_dump(params))
+                    connection = self.connection()
+                    with self.assertRaisesRegex(ValueError, "organism"):
+                        ingest_experiment(self.folder, connection, dry_run=dry_run,
+                                          user_id=73, import_id=41, dpx_id="DPX000001")
+                    self.assertEqual(self.inserted_rows(connection), {})
+                    connection.commit.assert_not_called()
+                    connection.rollback.assert_called_once_with()
+                    connection.cursor.return_value.close.assert_called_once_with()
+
+    def test_comparison_files_ignore_case_and_preserve_metadata(self):
+        self.write_experiment()
+        params_path = self.folder / "params.yaml"
+        params = yaml.safe_load(params_path.read_text())
+        original_names = params["comparison"]
+        params["comparison"] = ["cAMP_0.1mM_vs_CTR_LiP", "IPTG 100 uM_vs_H20 - control"]
+        params_path.write_text(yaml.safe_dump(params))
+        for comparison_id, old_name, new_name, change_case in zip(
+            params["dpx_comparison"], original_names, params["comparison"], (str.lower, str.upper)
+        ):
+            safe_name = new_name.replace("/", "_")
+            for prefix in ("differential_abundance", "go_term"):
+                old_path = self.folder / f"{prefix}_{comparison_id}_{old_name.replace('/', '_')}.tsv"
+                old_path.rename(self.folder / change_case(f"{prefix}_{comparison_id}_{safe_name}.tsv"))
+
+        connection = self.connection()
+        ingest_experiment(self.folder, connection, user_id=73, import_id=41, dpx_id="DPX000001")
+        rows = self.inserted_rows(connection)
+        self.assertEqual({table: len(data) for table, data in rows.items()}, {
+            "dynaprot_experiment": 1,
+            "dynaprot_experiment_comparison": 2,
+            "differential_abundance": 4,
+            "go_analysis": 2,
+            "protein_scores": 4,
+        })
+        self.assertEqual([row["dose"] for row in rows["dynaprot_experiment_comparison"]],
+                         params["comparison"])
+        self.assertEqual({row["pg_protein_accessions"] for row in rows["differential_abundance"]},
+                         {"P12345", "P67890"})
+        connection.commit.assert_called_once_with()
+
+    def test_uppercase_metadata_and_qc_filenames_are_imported(self):
+        self.write_experiment()
+        (self.folder / "params.yaml").rename(self.folder / "PARAMS.YAML")
+        pdf = b"%PDF-1.7\nCase-sensitive fixture content\n%%EOF"
+        (self.folder / "QC_PLOTS.PDF").write_bytes(pdf)
+        connection = self.connection()
+        ingest_experiment(self.folder, connection, user_id=73, import_id=41, dpx_id="DPX000001")
+        rows = self.inserted_rows(connection)
+        self.assertEqual(rows["dynaprot_experiment"][0]["qc_pdf_file"], pdf)
+        self.assertEqual(len(rows["differential_abundance"]), 4)
+        connection.commit.assert_called_once_with()
+
+    def test_ambiguous_result_filename_case_rolls_back(self):
+        self.write_experiment()
+        for prefix in ("differential_abundance", "go_term"):
+            with self.subTest(prefix=prefix):
+                original = self.folder / f"{prefix}_1_treated_control.tsv"
+                duplicate = self.folder / original.name.upper()
+                duplicate.write_bytes(original.read_bytes())
+                if original.samefile(duplicate):
+                    self.skipTest("Filesystem cannot store filenames differing only by case")
+                try:
+                    connection = self.connection()
+                    with self.assertRaisesRegex(ValueError, "Ambiguous"):
+                        ingest_experiment(self.folder, connection, user_id=73,
+                                          import_id=41, dpx_id="DPX000001")
+                    connection.commit.assert_not_called()
+                    connection.rollback.assert_called_once_with()
+                    connection.cursor.return_value.close.assert_called_once_with()
+                finally:
+                    duplicate.unlink()
+
+    def test_ambiguous_params_filename_rejected_before_database_access(self):
+        self.write_experiment()
+        original = self.folder / "params.yaml"
+        duplicate = self.folder / "PARAMS.YAML"
+        duplicate.write_bytes(original.read_bytes())
+        if original.samefile(duplicate):
+            self.skipTest("Filesystem cannot store filenames differing only by case")
+        connection = self.connection()
+        with self.assertRaisesRegex(ValueError, "Ambiguous"):
+            ingest_experiment(self.folder, connection, user_id=73, import_id=41, dpx_id="DPX000001")
+        connection.cursor.assert_not_called()
+        connection.commit.assert_not_called()
+
+    def test_missing_optional_go_files_still_import_abundance_and_scores(self):
+        self.write_experiment()
+        for path in self.folder.glob("go_term_*.tsv"):
+            path.unlink()
+        connection = self.connection()
+        ingest_experiment(self.folder, connection, user_id=73, import_id=41, dpx_id="DPX000001")
+        rows = self.inserted_rows(connection)
+        self.assertNotIn("go_analysis", rows)
+        self.assertEqual(len(rows["differential_abundance"]), 4)
+        self.assertEqual(len(rows["protein_scores"]), 4)
+        connection.commit.assert_called_once_with()
+
     def test_invalid_user_id_fails_before_file_or_database_access(self):
         invalid_ids = (None, True, False, 0, -1, 4294967296, "73", 73.0, [], {})
         for user_id in invalid_ids:

@@ -14,6 +14,7 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from dspa.files import find_file
 from dspa.ownership import validate_import_id, validate_user_id
 
 
@@ -29,6 +30,18 @@ def _replace_missing(value, default=None):
     if isinstance(value, str) and value.strip().upper() in {"NA", "NAN", ""}:
         return default
     return value
+
+
+def _organism_name(value) -> str | None:
+    """Keep uploaded organism metadata on the experiment, not in shared references."""
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("organism must be a string or null")
+    name = _replace_missing(value.strip())
+    if name is not None and len(name) > 255:
+        raise ValueError("organism must contain at most 255 characters")
+    return name
 
 
 def _has_no_publication(publication, doi) -> bool:
@@ -96,21 +109,22 @@ def ingest_experiment(
     if not isinstance(dpx_id, str) or not re.fullmatch(r"DPX[0-9]{6,8}", dpx_id):
         raise ValueError("dpx_id must be an allocated experiment ID")
 
-    params_file = folder / "params.yaml"
-    if not params_file.exists():
+    params_file = find_file(folder, "params.yaml")
+    if params_file is None:
         raise FileNotFoundError(f"No params.yaml in {folder}")
 
     with params_file.open() as f:
         params = yaml.safe_load(f)
 
     pdf_data = None
-    pdf_path = folder / "qc_plots.pdf"
-    if pdf_path.exists():
+    pdf_path = find_file(folder, "qc_plots.pdf")
+    if pdf_path is not None:
         pdf_data = pdf_path.read_bytes()
 
     cursor = connection.cursor()
 
     try:
+        organism_name = _organism_name(params.get("organism"))
         publication = _replace_missing(params.get("publication"))
         doi = _replace_missing(params.get("doi"))
         is_hidden = _has_no_publication(publication, doi)
@@ -119,19 +133,20 @@ def ingest_experiment(
             cursor.execute(
                 """
                 INSERT INTO dynaprot_experiment (
-                    dynaprot_experiment, perturbation, `condition`, taxonomy_id, strain,
+                    dynaprot_experiment, perturbation, `condition`, taxonomy_id, organism_name, strain,
                     instrument, number_of_lip_files, number_of_tr_files, experiment,
                     approach, reference_for_protocol, data_analysis, publication, doi,
                     search_settings, fasta, data_re_analysis_settings, path_to_raw_files,
                     digestion_protocol, e_s_ratio, pk_digestion_time_in_sec, protease,
                     author, input_file, qc_pdf_file, is_hidden, user_id, import_id
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
                 (
                     dpx_id,
                     _replace_missing(params.get("perturbation")),
                     _replace_missing(params.get("condition")),
                     int(params.get("taxonomy_id", 0)),
+                    organism_name,
                     _replace_missing(params.get("strain")),
                     _replace_missing(params.get("instrument")),
                     int(params.get("n_files", 0)),
@@ -190,9 +205,9 @@ def ingest_experiment(
                 )
 
             # -- differential abundance --
-            da_file = folder / f"differential_abundance_{comp_id}_{comp_name_safe}.tsv"
+            da_file = find_file(folder, f"differential_abundance_{comp_id}_{comp_name_safe}.tsv")
             da_rows: list[dict] = []
-            if da_file.exists():
+            if da_file is not None:
                 df = pd.read_csv(da_file, sep="\t").where(pd.notnull, None)
                 if "start" in df.columns:
                     df = df.rename(columns={"start": "pos_start", "end": "pos_end"})
@@ -223,8 +238,8 @@ def ingest_experiment(
                     )
 
             # -- GO analysis --
-            go_file = folder / f"go_term_{comp_id}_{comp_name_safe}.tsv"
-            if go_file.exists():
+            go_file = find_file(folder, f"go_term_{comp_id}_{comp_name_safe}.tsv")
+            if go_file is not None:
                 df = pd.read_csv(go_file, sep="\t").where(pd.notnull, None)
                 go_rows = [
                     {

@@ -20,7 +20,9 @@ from unittest.mock import patch
 DATABASE_ROOT = Path(__file__).resolve().parents[1]
 MCP_ROOT = DATABASE_ROOT.parent / 'dspa-mcp'
 HARNESS = MCP_ROOT / 'tests/test_multiuser_sql.py'
-SQL_FILES = [MCP_ROOT / name for name in ('schema.sql', 'setup_mcp_account_db.sql', 'setup_multiuser.sql')]
+SQL_FILES = [MCP_ROOT / name for name in (
+    'schema.sql', 'setup_mcp_account_db.sql', 'setup_multiuser.sql', 'setup_organism_names.sql',
+)]
 
 
 def dependencies_available():
@@ -44,13 +46,14 @@ class MysqlImportTests(unittest.TestCase):
         (folder / 'params.yaml').write_text(
             f'taxonomy_id: {"invalid" if bad else "9606"}\ncondition: Test\npublication: Test publication\n'
             'dpx_comparison: [COMP01]\ncomparison: [test]\n'
+            f'organism: {name} organism\n'
             f'user_id: {forged_owner}\nimport_id: 999999\n'
         )
-        (folder / 'differential_abundance_COMP01_test.tsv').write_text(
+        (folder / 'differential_abundance_comp01_test.tsv').write_text(
             'pg_protein_accessions\teg_modified_peptide\tstart\tend\tdiff\tadj_pval\tpval\tuser_id\n'
             f'P12345\tPEPTIDE\t1\t8\t2.0\t0.01\t0.02\t{forged_owner}\n'
         )
-        (folder / 'go_term_COMP01_test.tsv').write_text(
+        (folder / 'go_term_comp01_test.tsv').write_text(
             'term\tgo_id\tpval\tadj_pval\tn_detected_proteins\tn_detected_proteins_in_process\t'
             'n_significant_proteins\tn_significant_proteins_in_process\tn_proteins_expected\tenrichment_type\tgo_type\tuser_id\n'
             f'Test term\tGO:0000001\t0.01\t0.02\t10\t5\t3\t2\t1.5\tover\tBP\t{forged_owner}\n'
@@ -75,6 +78,7 @@ class MysqlImportTests(unittest.TestCase):
                 setup = setup.replace('__DSPA_DB_' + role + '_PASSWORD__', 'scoped-test-only')
             database.sql(setup)
             database.sql(SQL_FILES[2].read_text())
+            database.sql(SQL_FILES[3].read_text())
             for account in ('dspa_importer', 'dspa_user_manager', 'dspa_context_manager'):
                 database.sql(f"ALTER USER '{account}'@'%' IDENTIFIED BY 'scoped-test-only' ACCOUNT UNLOCK")
             fixtures = Path(directory)
@@ -101,6 +105,15 @@ class MysqlImportTests(unittest.TestCase):
                 self.assertEqual(database.rows('SELECT user_id,status FROM dynaprotdbv2.imports ORDER BY user_id'),
                                  [[str(alice), 'succeeded'], [str(bob), 'succeeded']])
                 self.assertEqual(database.rows('SELECT COUNT(*) FROM dynaprotdbv2.dynaprot_experiment WHERE import_id IS NULL'), [['0']])
+                self.assertEqual(database.rows(
+                    'SELECT user_id,taxonomy_id,organism_name FROM dynaprotdbv2.dynaprot_experiment ORDER BY user_id'),
+                    [[str(alice), '9606', 'alice organism'], [str(bob), '9606', 'bob organism']])
+                self.assertEqual(database.rows('SELECT COUNT(*) FROM dynaprotdbv2.organism'), [['0']])
+                for owner, name in ((alice, 'alice organism'), (bob, 'bob organism')):
+                    with bound_connection(owner, env_file=empty_environment) as connection:
+                        with connection.cursor() as cursor:
+                            cursor.execute('SELECT organism_name FROM dynaprot_experiment')
+                            self.assertEqual(cursor.fetchall(), [(name,)])
 
                 foreign_import = create_import(bob, 'foreign.zip', env_file=empty_environment)
                 before = database.rows('SELECT COUNT(*) FROM dynaprotdbv2.dynaprot_experiment')

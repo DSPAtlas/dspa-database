@@ -63,6 +63,20 @@ An experiment folder must contain a `params.yaml` file plus one or more data fil
 - `go_term_{comp_id}_{comparison_name}.tsv`
 - `qc_plots.pdf` *(optional)*
 
+Filenames are matched without regard to case, including `params.yaml`, comparison
+TSVs, and the QC PDF. For example, `cAMP_0.1mM_vs_CTR_LiP` in the YAML can use
+`differential_abundance_1_camp_0.1mm_vs_ctr_lip.tsv`. Comparison names stored in the
+database retain their original spelling. If multiple files differ only by case,
+the import rejects the ambiguous match instead of selecting one.
+
+The optional `organism` name in `params.yaml` is stored as `organism_name` on the
+owned experiment alongside `taxonomy_id`. Names are trimmed and limited to 255
+characters; missing, blank, `NA`, and `NaN` names are stored as null. Uploads do not
+write to the shared organism reference table. Private visualization reads use the
+uploaded name when available and fall back to the reference name otherwise.
+Existing installations need the `setup_organism_names.sql` schema extension before
+running this importer version.
+
 ```bash
 # Ingest a single experiment folder
 uv run dspa-ingest /path/to/LiP_School9_LiP --user-id 42

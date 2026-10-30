@@ -74,6 +74,27 @@ class IngestionCliTests(unittest.TestCase):
             for folder, dpx_id in zip(sorted([self.experiment, second]), ["DPX000123", "DPX000124"])
         ])
 
+    def test_uppercase_params_filename_discovers_single_experiment(self):
+        (self.experiment / "params.yaml").rename(self.experiment / "PARAMS.YAML")
+        result = self.runner.invoke(main, [str(self.experiment), "--user-id", "73"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.ingest_experiment.assert_called_once_with(
+            self.experiment, self.connection, user_id=73, import_id=31,
+            dpx_id="DPX000123", dry_run=False)
+
+    def test_mixed_case_params_filenames_discover_nested_experiments(self):
+        second = self.create_experiment("nested/second")
+        (self.experiment / "params.yaml").rename(self.experiment / "PARAMS.YAML")
+        (second / "params.yaml").rename(second / "Params.Yaml")
+        self.allocate_experiment_id.side_effect = ["DPX000123", "DPX000124"]
+        result = self.runner.invoke(main, [str(self.root), "--user-id", "73"])
+        self.assertEqual(result.exit_code, 0, result.output)
+        self.assertEqual(self.ingest_experiment.call_args_list, [
+            call(folder, self.connection, user_id=73, import_id=31,
+                 dpx_id=dpx_id, dry_run=False)
+            for folder, dpx_id in zip(sorted([self.experiment, second]), ["DPX000123", "DPX000124"])
+        ])
+
     def test_foreign_owned_import_cannot_start_ingestion(self):
         self.get_import.side_effect = PermissionError("Import is unavailable for this user")
         result = self.runner.invoke(main, [str(self.experiment), "--user-id", "73", "--import-id", "99"])

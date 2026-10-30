@@ -13,6 +13,7 @@ from pathlib import Path
 import click
 
 from dspa.db import get_connection
+from dspa.files import find_file
 from dspa.ingest import ingest_experiment
 from dspa.ownership import (
     allocate_experiment_id, bound_connection, create_import, finish_import, get_import,
@@ -22,9 +23,12 @@ from dspa.uniprot import populate_reference_tables
 
 
 def _find_experiment_folders(root: Path) -> list[Path]:
-    if (root / "params.yaml").exists():
+    if find_file(root, "params.yaml") is not None:
         return [root]
-    return sorted(p.parent for p in root.rglob("params.yaml"))
+    return sorted({
+        path.parent for path in root.rglob("*")
+        if path.name.casefold() == "params.yaml" and path.is_file()
+    })
 
 
 @contextmanager
