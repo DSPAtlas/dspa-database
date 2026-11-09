@@ -106,5 +106,38 @@ Common taxonomy IDs: `9606` (human), `10090` (mouse), `559292` (yeast), `83333` 
 After a large bulk import, apply the performance indexes:
 
 ```bash
+# Local Docker database (no mysql client needed on the host)
+docker compose exec -T mysql mysql -udspa -pdspa dynaprotdbv2 < INDEXES.SQL
+
+# Any other server (export the variables from .env first)
 mysql -u $MYSQL_USER -p$MYSQL_PASSWORD -h $MYSQL_HOST -P $MYSQL_PORT $MYSQL_DATABASE < INDEXES.SQL
+```
+
+Run this only once per database. If an index already exists, MySQL stops with `Duplicate key name` and does not run the remaining statements. Rows inserted after the indexes exist are indexed automatically, so you do not need to run it again after later imports.
+
+## Building and Exporting a Database from Scratch
+
+1. Start a clean database: `docker compose down -v && docker compose up -d`
+2. Ingest the experiments: `uv run dspa-ingest /path/to/data/root`
+3. Populate the reference tables: `uv run dspa-build-reference 9606 10090 559292 83333`
+4. Apply the indexes (see [Database Indexes](#database-indexes))
+5. Export the database to a `.sql` file:
+
+```bash
+docker compose exec -T mysql mysqldump -uroot -proot --single-transaction --hex-blob --routines --triggers --default-character-set=utf8mb4 dynaprotdbv2 > dynaprotdbv2_$(date +%F).sql
+```
+
+- `mysql` is the Docker Compose service, `mysqldump` is the program that runs inside it, and `dynaprotdbv2` is the database to export.
+- `--hex-blob` is required so the `qc_pdf_file` LONGBLOBs are exported without corruption.
+- `--single-transaction` exports a consistent snapshot without locking the tables.
+- If you apply the indexes before the export, the dump includes them in its `CREATE TABLE` statements.
+- The warning `Using a password on the command line interface can be insecure` is printed to stderr and is not written to the file.
+- To compress the dump, replace `> file.sql` with `| gzip > dynaprotdbv2_$(date +%F).sql.gz`.
+
+To check the export, run `tail -n 1` on the file. The last line should be `-- Dump completed on ...`.
+
+To restore the dump into the Docker database:
+
+```bash
+docker compose exec -T mysql mysql -uroot -proot dynaprotdbv2 < dynaprotdbv2_YYYY-MM-DD.sql
 ```
