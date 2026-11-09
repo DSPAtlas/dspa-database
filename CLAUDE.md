@@ -5,70 +5,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Dev Setup
 
 ```bash
-cp .env.example .env          # fill in credentials
-uv sync                       # install package + deps into .venv
-docker compose up -d          # spin up MySQL (port 3306) + Adminer (port 8080)
-uv run dspa-ingest --help
+cp .env.example .env && uv sync
+docker compose up -d   # MySQL :3306 + Adminer :8080
 ```
 
-Adminer: http://localhost:8080 — server `mysql`, user `dspa`, password `dspa`, database `dynaprotdbv2`.
+Adminer: http://localhost:8080 — server `mysql`, user/password `dspa`, database `dynaprotdbv2`. Schema is applied automatically from `docker/init/01_schema.sql` on first start. Credentials live in `.env` (loaded via `python-dotenv`; never hardcode them).
 
-The Docker MySQL container auto-applies `docker/init/01_schema.sql` on first start.
-
-## Overview
-
-This repo manages the MySQL database (`dynaprotdbv2`) for the [DynaProt/DSPAtlas](https://www.dynaprot.org) platform, which stores Limited proteolysis (LiP) mass spectrometry experiment data. The database lives on a remote VM at `sysbc-lx-s03.ethz.ch` and is accessed at port 3307.
-
-## Ingesting Experiments
+## CLI Commands
 
 ```bash
-# Ingest all experiment folders under a root directory (recursive):
-uv run dspa-ingest /path/to/data/root
+uv run dspa-ingest /path/to/root          # ingest all experiment folders recursively
+uv run dspa-ingest /path/to/folder        # ingest a single experiment folder
+uv run dspa-ingest /path/to/root --dry-run
 
-# Ingest a single experiment folder:
-uv run dspa-ingest /path/to/LiP_School9_LiP
+uv run dspa-import-dump /path/to/dump.sql            # import reference tables from mysqldump
+uv run dspa-import-dump /path/to/dump.sql --truncate # wipe first, then import
 
-# Preview what would be ingested without writing to the DB:
-uv run dspa-ingest /path/to/data/root --dry-run
-```
-
-The CLI walks the tree, finds every subfolder containing a `params.yaml`, and runs the full ingestion pipeline (metadata → differential abundance → GO analysis → protein scores) for each.
-
-The old shell-based upload to the remote VM lives in `uploadNewExperiment/` (kept for reference).
-
-## Database Connection
-
-All scripts expect these environment variables (never hardcode credentials):
-
-```bash
-export MYSQL_USER=root
-export MYSQL_PASSWORD=...
-export MYSQL_HOST=127.0.0.1
-export MYSQL_PORT=3307
-export MYSQL_DATABASE=dynaprotdbv2
+uv run dspa-build-reference 9606 10090 559292         # fetch from UniProt by taxonomy ID
+uv run dspa-build-reference 9606 --truncate
 ```
 
 ## Architecture
 
-### Ingestion Pipeline (`src/dspa/`)
+### Package (`src/dspa/`)
 
-The canonical code lives in the `src/dspa/` package:
+- **`db.py`** — `get_connection()`: loads `.env`, returns MySQL connection
+- **`ingest.py`** — `ingest_experiment(folder, connection)`: full pipeline for one experiment folder; reads `params.yaml`, bulk-inserts into `differential_abundance` and `go_analysis`, computes and inserts `protein_scores`; single commit per folder
+- **`dump.py`** — `import_reference_tables()`: streams a mysqldump and executes only INSERT statements for `go_term`, `organism_proteome`, `organism_proteome_entries`
+- **`uniprot.py`** — `populate_reference_tables()`: fetches reviewed proteins + GO annotations from UniProt REST API for given taxonomy IDs; handles pagination
+- **`cli.py`** — Click entry points for all three commands above
 
-- **`db.py`** — `get_connection()` loads `.env` via `python-dotenv` and returns a MySQL connection
-- **`ingest.py`** — `ingest_experiment(folder, connection)` handles one experiment folder end-to-end:
-  - reads `params.yaml` → inserts `dynaprot_experiment` + `dynaprot_experiment_comparison` rows
-  - reads `differential_abundance_{comp_id}_{comp_name}.tsv` → bulk-inserts into `differential_abundance`
-  - reads `go_term_{comp_id}_{comp_name}.csv` (tab-delimited) → bulk-inserts into `go_analysis`
-  - computes protein scores in-memory from the DA rows → inserts into `protein_scores`
-  - commits once per folder
-- **`cli.py`** — Click CLI (`dspa-ingest`); walks a root directory for `params.yaml` files, calls `ingest_experiment` for each
+### Ingestion Details
 
-Score formula: `-log10(adj_pval + 1e-10) + |diff|`, accumulated per protein, only for rows where `adj_pval < 0.05` and `|diff| > 0.2`.
+Experiment input files (all in the folder alongside `params.yaml`):
+- `differential_abundance_{comp_id}_{comp_name}.tsv` — comparison names with `/` are sanitised to `_` for filenames
+- `go_term_{comp_id}_{comp_name}.tsv` — tab-delimited; `go_id` values arrive as `[GO:0000001]` and are stored stripped as `GO:0000001`
+- `qc_plots.pdf` — optional, stored as LONGBLOB
 
-### ID Scheme
+`params.yaml` key fields: `dpx_comparison` (list of short IDs), `comparison` (list of human-readable names, same length), `taxonomy_id`, plus remaining fields mapping 1:1 to `dynaprot_experiment` columns.
 
-- Experiment ID: `DPX000001` (auto-incremented from `MAX(dynaprot_experiment)`)
-- Comparison ID: `DPX000001-COMP01` (concatenated from `dpx_id` + `-` + comp_id from `params.yaml`)
+ID scheme: experiment `DPX000001` (auto-incremented), comparison `DPX000001-C01`.
+
+Protein score formula: `-log10(adj_pval + 1e-10) + |diff|`, summed per protein, only for rows where `adj_pval < 0.05` and `|diff| > 0.2`.
 
 ### Schema
 
@@ -79,23 +57,8 @@ dynaprot_experiment ──< dynaprot_experiment_comparison ──< differential_
                                                        ──< go_analysis ──> go_term
 ```
 
-`dpx_comparison` (VARCHAR 11) is the FK joining comparisons to their data rows across `differential_abundance`, `protein_scores`, and `go_analysis`.
-
-### Indexes
-
-After any bulk upload, apply or verify the indexes in `INDEXES.SQL`. The most performance-critical are:
-- `idx_ope_taxonomy_protein` on `organism_proteome_entries(taxonomy_id, protein_name)`
-- `idx_da_comparison_accession_pos` on `differential_abundance(dpx_comparison, pg_protein_accessions, pos_start)`
-- `idx_ps_dpx_protein_score` on `protein_scores(dpx_comparison, pg_protein_accessions, cumulativeScore)`
-
-### `params.yaml` Format
-
-Key fields read by `metadata.py`:
-- `dpx_comparison`: list of short comparison IDs (e.g. `["C01", "C02"]`)
-- `comparison`: list of human-readable names matching the TSV/CSV filenames (same length as `dpx_comparison`)
-- `taxonomy_id`: NCBI taxonomy integer (9606=human, 10090=mouse, 559292=yeast, 83333/562=E. coli)
-- All other fields map 1:1 to `dynaprot_experiment` columns
+Key indexes (apply after bulk imports via `INDEXES.SQL`): `idx_ope_taxonomy_protein`, `idx_da_comparison_accession_pos`, `idx_ps_dpx_protein_score`.
 
 ## Legacy Code
 
-`databaseSetUp/` and `uploadNewExperiment/` are kept for reference only. Do not use them as templates — they have hardcoded credentials, a bug where `dpx_id` is used without being assigned, and a missing `import os`. All new work goes through `src/dspa/`.
+`databaseSetUp/` and `uploadNewExperiment/` are reference only — buggy and use hardcoded credentials. All active code is in `src/dspa/`.
