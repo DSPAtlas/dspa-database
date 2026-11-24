@@ -1,0 +1,50 @@
+name: dspa-frontend-db
+
+services:
+  mysql:
+    image: mysql:8.0.46
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: dynaprotdbv2
+      MYSQL_USER: dspa
+      MYSQL_PASSWORD: dspa
+    ports:
+      - "127.0.0.1:3306:3306"
+    volumes:
+      - frontend_mysql_data:/var/lib/mysql
+      - type: bind
+        source: ../dspa-mcp/dynaprotdbv2_2026-11-09.sql
+        target: /docker-entrypoint-initdb.d/01_dump.sql
+        read_only: true
+        bind:
+          create_host_path: false
+    configs:
+      - source: mysql_packet_limit
+        target: /etc/mysql/conf.d/frontend.cnf
+    healthcheck:
+      test: ["CMD-SHELL", "mysql --protocol=TCP -h127.0.0.1 -udspa -pdspa dynaprotdbv2 -e 'SELECT 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 360
+
+  adminer:
+    image: adminer:latest
+    profiles: ["tools"]
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+configs:
+  mysql_packet_limit:
+    content: |
+      [mysql]
+      max_allowed_packet=512M
+      [mysqld]
+      max_allowed_packet=512M
+      innodb_buffer_pool_size=16G
+      innodb_redo_log_capacity=8G
+
+volumes:
+  frontend_mysql_data:
